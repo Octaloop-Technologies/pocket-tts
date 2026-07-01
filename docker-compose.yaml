@@ -6,9 +6,11 @@ services:
     volumes:
       - pocket_tts_cache:/root/.cache/pocket_tts
       - hf_cache:/root/.cache/huggingface
+      - sqlitedb:/root/sqlite3_db/subscriptions.db
     command: ["uv", "run", "pocket-tts", "serve", "--host", "0.0.0.0"]
     restart: unless-stopped
 
 volumes:
   pocket_tts_cache:
   hf_cache:
+  sqlitedb:

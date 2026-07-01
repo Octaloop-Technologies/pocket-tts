@@ -21,6 +21,9 @@ dependencies = [
     "einops>=0.4.0",
     "huggingface_hub>=0.13.0",
     "requests>=2.20.0",
+    "stripe>=15.3.0",
+    "sqlalchemy>=2.0.51",
+    "pydantic-settings>=2.14.2",
 ]
 
 [project.optional-dependencies]
@@ -57,7 +60,7 @@ line-length = 100
 
 [tool.ruff.format]
 line-ending = "lf"
-# avoid having a trailing comma changing 
+# avoid having a trailing comma changing
 # the behavior of the formatter
 skip-magic-trailing-comma = true
 

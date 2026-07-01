@@ -1,0 +1,7 @@
+Price ID,Product ID,Product Name,Product Statement Descriptor,Product Tax Code,Description,Created (UTC),Amount,Currency,Interval,Interval Count,Usage Type,Aggregate Usage,Billing Scheme,Trial Period Days,Tax Behavior
+price_1Tngvo058295zxTzx7Gfl7vI,prod_UnHUurvjLGXwT3,POCKET-TTS-ENTERPRISE,,txcd_10103101,,2026-06-29 15:17,"99,99",usd,month,1,licensed,,per_unit,,inclusive
+price_1Tngvo058295zxTzLRGydj2g,prod_UnHUurvjLGXwT3,POCKET-TTS-ENTERPRISE,,txcd_10103101,,2026-06-29 15:17,"1099,99",eur,year,1,licensed,,per_unit,,inclusive
+price_1TngsD058295zxTzjW68aPV2,prod_UnHRKJiuS2fMOe,POCKET-TTS-PRO,,txcd_10103101,,2026-06-29 15:13,"229,99",usd,year,1,licensed,,per_unit,,inclusive
+price_1TngsD058295zxTz7E43NG1s,prod_UnHRKJiuS2fMOe,POCKET-TTS-PRO,,txcd_10103101,,2026-06-29 15:13,"19,99",eur,month,1,licensed,,per_unit,,inclusive
+price_1TngqJ058295zxTzrzi9ti4g,prod_UnHEHWOdbglAMD,POCKET-TTS-BASIC,,txcd_10103101,,2026-06-29 15:11,"99,99",usd,year,1,licensed,,per_unit,,inclusive
+price_1Tngfb058295zxTzTe3Pg5Du,prod_UnHEHWOdbglAMD,POCKET-TTS-BASIC,,txcd_10103101,,2026-06-29 15:00,"9,99",usd,month,1,licensed,,per_unit,,inclusive
