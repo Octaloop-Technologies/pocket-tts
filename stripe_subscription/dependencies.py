@@ -24,11 +24,8 @@ def get_active_subscription(
     sub = db.query(Subscription).filter_by(user_id=user.id, status="active").first()
     if not sub:
         raise HTTPException(status_code=403, detail="No active subscription")
-    # `sub.current_period_end` is Optional[datetime]; it can be None
-    if (
-        sub.current_period_end is not None
-        and sub.current_period_end < datetime.utcnow()
-    ):
+    # `sub.end_date` is Optional[datetime]; it can be None
+    if sub.end_date is not None and sub.end_date < datetime.utcnow():
         sub.status = "expired"
         db.commit()
         raise HTTPException(status_code=403, detail="Subscription expired")

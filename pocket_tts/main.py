@@ -30,12 +30,14 @@ from pocket_tts.default_parameters import (
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
-from stripe_subscription.database import Base, engine, get_db
-from stripe_subscription.dependencies import get_active_subscription, get_current_user
-from stripe_subscription.models import Subscription, User
 
 # ----- Stripe subscription integration -----
-from stripe_subscription.routes import router as stripe_router
+from stripe_subscription import router as stripe_router
+from stripe_subscription.config import settings
+from stripe_subscription.database import Base, engine, get_db
+from stripe_subscription.dependencies import get_active_subscription, get_current_user
+from stripe_subscription.logging import logger
+from stripe_subscription.models import Plan, Subscription, User
 
 # -------------------------------------------
 
@@ -45,11 +47,6 @@ cli_app = typer.Typer(
     help="Kyutai Pocket TTS - Text-to-Speech generation tool",
     pretty_exceptions_show_locals=False,
 )
-
-
-# ------------------------------------------------------
-# The pocket-tts server implementation
-# ------------------------------------------------------
 
 # Global model instance
 tts_model: TTSModel | None = None
@@ -75,13 +72,68 @@ web_app.add_middleware(
 web_app.include_router(stripe_router)
 
 
+# ----- Seed default plans on startup -----
 @web_app.on_event("startup")
 def startup():
-    """Create database tables on startup."""
     Base.metadata.create_all(bind=engine)
-    logger.info("Stripe subscription database tables created/verified.")
+    db = next(get_db())
+    try:
+        if db.query(Plan).count() == 0:
+            plans = [
+                Plan(
+                    name="Basic",
+                    tier="basic",
+                    monthly_price=500,
+                    yearly_price=4800,
+                    quota_limit=50000,
+                    stripe_price_monthly=getattr(
+                        settings, "STRIPE_PRICE_BASIC_MONTHLY", ""
+                    )
+                    or "",
+                    stripe_price_yearly=getattr(
+                        settings, "STRIPE_PRICE_BASIC_YEARLY", ""
+                    )
+                    or "",
+                ),
+                Plan(
+                    name="Pro",
+                    tier="pro",
+                    monthly_price=1500,
+                    yearly_price=14400,
+                    quota_limit=250000,
+                    stripe_price_monthly=getattr(
+                        settings, "STRIPE_PRICE_PRO_MONTHLY", ""
+                    )
+                    or "",
+                    stripe_price_yearly=getattr(settings, "STRIPE_PRICE_PRO_YEARLY", "")
+                    or "",
+                ),
+                Plan(
+                    name="Enterprise",
+                    tier="enterprise",
+                    monthly_price=5000,
+                    yearly_price=48000,
+                    quota_limit=1500000,
+                    stripe_price_monthly=getattr(
+                        settings, "STRIPE_PRICE_ENTERPRISE_MONTHLY", ""
+                    )
+                    or "",
+                    stripe_price_yearly=getattr(
+                        settings, "STRIPE_PRICE_ENTERPRISE_YEARLY", ""
+                    )
+                    or "",
+                ),
+            ]
+            db.add_all(plans)
+            db.commit()
+            logger.info("Default plans seeded.")
+    except Exception as e:
+        logger.error(f"Error seeding plans: {str(e)}", exc_info=True)
+    finally:
+        db.close()
 
 
+# ----- Endpoints -----
 @web_app.get("/", response_class=HTMLResponse)
 async def root():
     if tts_model is None:
@@ -101,9 +153,93 @@ async def health():
     return {"status": "healthy"}
 
 
-def write_to_queue(queue, text_to_generate, model_state):
-    """Allows writing to the StreamingResponse as if it were a file."""
+@web_app.get("/success")
+async def success_page():
+    return HTMLResponse("""
+        <html><body>
+            <h1>Payment successful!</h1>
+            <p>Redirecting to the app...</p>
+            <script>setTimeout(() => window.location.href = '/', 2000);</script>
+        </body></html>
+    """)
 
+
+# ----- Protected TTS endpoint -----
+@web_app.post("/tts")
+def text_to_speech(
+    text: str = Form(...),
+    voice_url: str | None = Form(None),
+    voice_wav: UploadFile | None = File(None),
+    user: User = Depends(get_current_user),
+    sub: Subscription = Depends(get_active_subscription),
+    db: Session = Depends(get_db),
+):
+    if tts_model is None:
+        raise HTTPException(503, "TTS model not loaded")
+
+    if not text.strip():
+        raise HTTPException(400, "Text cannot be empty")
+
+    # Check quota
+    if sub.characters_used + len(text) > sub.quota_limit:
+        raise HTTPException(429, "Monthly character limit exceeded")
+
+    if voice_url is None and voice_wav is None:
+        voice_url = get_default_voice_for_language(str(tts_model.origin))
+    if voice_url is not None and voice_wav is not None:
+        raise HTTPException(400, "Cannot provide both voice_url and voice_wav")
+
+    # Get voice state
+    if voice_url is not None:
+        if not (
+            voice_url.startswith("http://")
+            or voice_url.startswith("https://")
+            or voice_url.startswith("hf://")
+            or voice_url in _ORIGINS_OF_PREDEFINED_VOICES
+        ):
+            raise HTTPException(
+                400, "voice_url must start with http://, https://, or hf://"
+            )
+        model_state = tts_model._cached_get_state_for_audio_prompt(voice_url)
+    elif voice_wav is not None:
+        suffix = Path(voice_wav.filename).suffix if voice_wav.filename else ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            content = voice_wav.file.read()
+            temp_file.write(content)
+            temp_file.flush()
+            temp_file_path = temp_file.name
+        try:
+            model_state = tts_model.get_state_for_audio_prompt(
+                Path(temp_file_path), truncate=True
+            )
+        finally:
+            os.unlink(temp_file_path)
+    else:
+        raise HTTPException(500, "This should never happen.")
+
+    # Generator that updates usage after streaming
+    def generate_with_usage():
+        try:
+            for chunk in generate_data_with_state(text, model_state):
+                yield chunk
+        finally:
+            sub.characters_used += len(text)
+            db.commit()
+            logger.info(
+                f"User {user.id} used {len(text)} chars, total {sub.characters_used}/{sub.quota_limit}"
+            )
+
+    return StreamingResponse(
+        generate_with_usage(),
+        media_type="audio/wav",
+        headers={
+            "Content-Disposition": "attachment; filename=generated_speech.wav",
+            "Transfer-Encoding": "chunked",
+        },
+    )
+
+
+def write_to_queue(queue, text_to_generate, model_state):
     if tts_model is None:
         raise RuntimeError("TTS model not loaded")
 
@@ -130,174 +266,35 @@ def write_to_queue(queue, text_to_generate, model_state):
 
 def generate_data_with_state(text_to_generate: str, model_state: dict):
     queue = Queue()
-
-    # Run your function in a thread
     thread = threading.Thread(
         target=write_to_queue, args=(queue, text_to_generate, model_state)
     )
     thread.start()
-
-    # Yield data as it becomes available
-    i = 0
     while True:
         data = queue.get()
         if data is None:
             break
-        i += 1
         yield data
-
     thread.join()
 
 
-# ----- Protected /tts endpoint with subscription and quota -----
-@web_app.post("/tts")
-def text_to_speech(
-    text: str = Form(...),
-    voice_url: str | None = Form(None),
-    voice_wav: UploadFile | None = File(None),
-    # Stripe dependencies
-    user: User = Depends(get_current_user),
-    sub: Subscription = Depends(get_active_subscription),
-    db: Session = Depends(get_db),
-):
-    """
-    Generate speech from text using the pre-loaded voice prompt or a custom voice.
-    Requires a valid API key and an active subscription with remaining quota.
-    """
-
-    if tts_model is None:
-        raise HTTPException(503, "TTS model not loaded")
-
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-
-    # Check quota
-    if sub.characters_used + len(text) > sub.quota_limit:
-        raise HTTPException(status_code=429, detail="Monthly character limit exceeded")
-
-    if voice_url is None and voice_wav is None:
-        voice_url = get_default_voice_for_language(str(tts_model.origin))
-
-    if voice_url is not None and voice_wav is not None:
-        raise HTTPException(
-            status_code=400, detail="Cannot provide both voice_url and voice_wav"
-        )
-
-    # Use the appropriate model state
-    if voice_url is not None:
-        if not (
-            voice_url.startswith("http://")
-            or voice_url.startswith("https://")
-            or voice_url.startswith("hf://")
-            or voice_url in _ORIGINS_OF_PREDEFINED_VOICES
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="voice_url must start with http://, https://, or hf://",
-            )
-        model_state = tts_model._cached_get_state_for_audio_prompt(voice_url)
-        logging.warning("Using voice from URL: %s", voice_url)
-    elif voice_wav is not None:
-        # Use uploaded voice file - preserve extension for format detection
-        suffix = Path(voice_wav.filename).suffix if voice_wav.filename else ".wav"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-            content = voice_wav.file.read()
-            temp_file.write(content)
-            temp_file.flush()
-            temp_file_path = temp_file.name
-
-        # Close the file before reading it back (required on Windows)
-        try:
-            model_state = tts_model.get_state_for_audio_prompt(
-                Path(temp_file_path), truncate=True
-            )
-        finally:
-            os.unlink(temp_file_path)
-    else:
-        raise HTTPException(status_code=500, detail="This should never happen.")
-
-    # Generator that yields audio and then updates usage when done
-    def generate_with_usage():
-        try:
-            for chunk in generate_data_with_state(text, model_state):
-                yield chunk
-        finally:
-            # After streaming completes, update usage
-            sub.characters_used += len(text)
-            db.commit()
-            logger.info(
-                f"User {user.id} used {len(text)} chars, "
-                f"total {sub.characters_used}/{sub.quota_limit}"
-            )
-
-    return StreamingResponse(
-        generate_with_usage(),
-        media_type="audio/wav",
-        headers={
-            "Content-Disposition": "attachment; filename=generated_speech.wav",
-            "Transfer-Encoding": "chunked",
-        },
-    )
-
-
-# ----- Simple endpoint to create a user (for testing/integration) -----
-@web_app.post("/create-user")
-def create_user(email: str, db: Session = Depends(get_db)):
-    """Create a new user with a generated API key."""
-    import secrets
-
-    api_key = secrets.token_urlsafe(32)
-    user = User(api_key=api_key, email=email)
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return {"api_key": api_key, "user_id": user.id}
-
-
 # ------------------------------------------------------
-# The pocket-tts single generation CLI implementation
+# CLI commands (unchanged)
 # ------------------------------------------------------
-
-
 @cli_app.command()
 def generate(
-    text: Annotated[str, typer.Option(help="Text to generate")] = None,  # type: ignore
+    text: Annotated[str, typer.Option(help="Text to generate")] = None,
     voice: Annotated[
-        str | None,
-        typer.Option(
-            help=(
-                "Path to audio conditioning file (voice to clone). "
-                "Defaults to a built-in voice chosen from the language: "
-                "'giovanni' for italian, 'lola' for spanish, 'juergen' for german, "
-                "'rafael' for portuguese, 'estelle' for french, 'alba' otherwise."
-            ),
-            show_default=False,
-        ),
+        str | None, typer.Option(help="Path to audio conditioning file")
     ] = None,
     quiet: Annotated[
         bool, typer.Option("-q", "--quiet", help="Disable logging output")
     ] = False,
     language: Annotated[
-        str | None,
-        typer.Option(
-            help=(
-                "Language for the TTS model. "
-                "'english_2026-01', 'english_2026-04', 'english', 'french_24l', 'spanish_24l',"
-                "'german_24l', 'portuguese_24l', 'italian_24l'."
-                " Incompatible with the config argument. Default is 'english', which is the same model as 'english_2026-04'. "
-                "The '24l' variants are bigger models, "
-                "not distilled yet and here only as preview. They're not the final "
-                "models for those languages."
-            ),
-            show_default=False,
-        ),
+        str | None, typer.Option(help="Language for the TTS model")
     ] = None,
     config: Annotated[
-        str | None,
-        typer.Option(
-            help="Path to locally-saved model config .yaml file. "
-            "Incompatible with the language argument. If not provided, will use the default English model."
-        ),
+        str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
     lsd_decode_steps: Annotated[
         int, typer.Option(help="Number of generation steps")
@@ -307,13 +304,13 @@ def generate(
     ] = DEFAULT_TEMPERATURE,
     noise_clamp: Annotated[
         float, typer.Option(help="Noise clamp value")
-    ] = DEFAULT_NOISE_CLAMP,  # type: ignore
+    ] = DEFAULT_NOISE_CLAMP,
     eos_threshold: Annotated[
         float, typer.Option(help="EOS threshold")
     ] = DEFAULT_EOS_THRESHOLD,
     frames_after_eos: Annotated[
         int, typer.Option(help="Number of frames to generate after EOS")
-    ] = DEFAULT_FRAMES_AFTER_EOS,  # type: ignore
+    ] = DEFAULT_FRAMES_AFTER_EOS,
     output_path: Annotated[
         str, typer.Option(help="Output path for generated audio")
     ] = "./tts_output.wav",
@@ -321,9 +318,7 @@ def generate(
     max_tokens: Annotated[
         int, typer.Option(help="Maximum number of tokens per chunk.")
     ] = MAX_TOKEN_PER_CHUNK,
-    quantize: Annotated[
-        bool, typer.Option(help="Apply int8 quantization to reduce memory usage")
-    ] = False,
+    quantize: Annotated[bool, typer.Option(help="Apply int8 quantization")] = False,
 ):
     """Generate speech using Kyutai Pocket TTS."""
     log_level = logging.ERROR if quiet else logging.INFO
@@ -331,9 +326,7 @@ def generate(
         if text is None:
             text = get_default_text_for_language(language)
         if text == "-":
-            # Read text from stdin
             text = sys.stdin.read()
-
         if not text.strip():
             logger.error("No input received from stdin.")
             raise typer.Exit(code=1)
@@ -347,23 +340,18 @@ def generate(
             quantize=quantize,
         )
         tts_model.to(device)
-
         if voice is None:
             voice = get_default_voice_for_language(language)
         model_state_for_voice = tts_model.get_state_for_audio_prompt(voice)
-        # Stream audio generation directly to file or stdout
         audio_chunks = tts_model.generate_audio_stream(
             model_state=model_state_for_voice,
             text_to_generate=text,
             frames_after_eos=frames_after_eos,
             max_tokens=max_tokens,
         )
-
         stream_audio_chunks(
             output_path, audio_chunks, tts_model.config.mimi.sample_rate
         )
-
-        # Only print the result message if not writing to stdout
         if output_path != "-":
             logger.info("Results written in %s", output_path)
         logger.info("-" * 20)
@@ -375,84 +363,44 @@ def generate(
         )
 
 
-# ----------------------------------------------
-# export audio to safetensors CLI implementation
-# ----------------------------------------------
-
-
 @cli_app.command()
 def export_voice(
-    audio_path: Annotated[
-        str, typer.Argument(help="Audio file or directory to convert and export")
-    ],
+    audio_path: Annotated[str, typer.Argument(help="Audio file or directory")],
     export_path: Annotated[str, typer.Argument(help="Output file or directory")],
     quiet: Annotated[
         bool, typer.Option("-q", "--quiet", help="Disable logging output")
     ] = False,
     language: Annotated[
-        str | None,
-        typer.Option(
-            help=(
-                "Language for the TTS model. "
-                "'english_2026-01', 'english_2026-04', 'english', 'french_24l', 'german_24l','spanish_24l',"
-                " 'portuguese_24l', 'italian_24l'."
-                " Incompatible with the config argument. Default is 'english', which is the same model as 'english_2026-04'. "
-                "The '24l' variants are bigger models, "
-                "not distilled yet and here only as preview."
-            ),
-            show_default=False,
-        ),
+        str | None, typer.Option(help="Language for the TTS model")
     ] = None,
     config: Annotated[
-        str | None,
-        typer.Option(
-            help="Path to locally-saved model config .yaml file. "
-            "Incompatible with the language argument. If not provided, will use the default English model."
-        ),
+        str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
 ):
-    """Convert and save audio to .safetensors file"""
-
+    """Convert and save audio to .safetensors file."""
     log_level = logging.ERROR if quiet else logging.INFO
     with enable_logging("pocket_tts", log_level):
         tts_model = TTSModel.load_model(language=language, config=config)
-        model_state = tts_model.get_state_for_audio_prompt(
-            audio_conditioning=audio_path, truncate=True
-        )
+        model_state = tts_model.get_state_for_audio_prompt(audio_path, truncate=True)
         export_model_state(model_state, export_path)
 
 
-# ----- serve command (unchanged except global tts_model) -----
 @cli_app.command()
 def serve(
     host: Annotated[str, typer.Option(help="Host to bind to")] = "localhost",
     port: Annotated[int, typer.Option(help="Port to bind to")] = 8000,
     reload: Annotated[bool, typer.Option(help="Enable auto-reload")] = False,
     language: Annotated[
-        str | None,
-        typer.Option(
-            help="Language for the TTS model. "
-            "'english_2026-01', 'english_2026-04', 'english', 'french_24l', 'german_24l', 'portuguese', 'italian', 'spanish'."
-            " Incompatible with the config argument. Default is 'english', which is the same model as 'english_2026-04'.",
-            show_default=False,
-        ),
+        str | None, typer.Option(help="Language for the TTS model")
     ] = None,
     config: Annotated[
-        str | None,
-        typer.Option(
-            help="Path to locally-saved model config .yaml file. "
-            "Incompatible with the language argument. If not provided, will use the default English model."
-        ),
+        str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
-    quantize: Annotated[
-        bool, typer.Option(help="Apply int8 quantization to reduce memory usage")
-    ] = False,
+    quantize: Annotated[bool, typer.Option(help="Apply int8 quantization")] = False,
 ):
     """Start the FastAPI server."""
-
     global tts_model
     tts_model = TTSModel.load_model(language=language, config=config, quantize=quantize)
-
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 
 
