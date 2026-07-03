@@ -89,3 +89,7 @@ QWEN.md
 voices
 
 italk.yaml
+
+# Additional
+# SQLITE3 db file
+*.db
