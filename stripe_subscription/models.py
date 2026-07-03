@@ -1,48 +1,83 @@
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
 
 from .database import Base
 
 
 class User(Base):
     __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    api_key = Column(String, unique=True, index=True, nullable=False)
+    stripe_customer_id = Column(String, nullable=True, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    api_key: Mapped[str] = mapped_column(
-        String, unique=True, index=True, nullable=False
-    )
-    stripe_customer_id: Mapped[Optional[str]] = mapped_column(
-        String, unique=True, nullable=True
-    )
-    email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    subscriptions = relationship("Subscription", back_populates="user")
+    audit_logs = relationship("AuditLog", back_populates="user")
 
-    subscription: Mapped[Optional["Subscription"]] = relationship(
-        "Subscription", back_populates="user", uselist=False
-    )
+
+class Plan(Base):
+    __tablename__ = "plans"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)  # "Basic", "Pro", "Enterprise"
+    tier = Column(String, nullable=False)  # internal key: basic, pro, enterprise
+    monthly_price = Column(Integer, nullable=True)  # cents, for display
+    yearly_price = Column(Integer, nullable=True)
+    quota_limit = Column(BigInteger, nullable=False)  # characters per billing period
+    stripe_price_monthly = Column(String, nullable=True)  # future use
+    stripe_price_yearly = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    subscriptions = relationship("Subscription", back_populates="plan")
 
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    plan_id = Column(Integer, ForeignKey("plans.id"), nullable=False)
+    stripe_subscription_id = Column(String, unique=True, nullable=True)
+    status = Column(
+        String, nullable=False, default="inactive"
+    )  # active, inactive, expired, canceled
+    start_date = Column(DateTime, nullable=True)
+    end_date = Column(DateTime, nullable=True)
+    characters_used = Column(BigInteger, default=0)
+    quota_limit = Column(BigInteger, nullable=False)
+    interval = Column(String, nullable=False, default="monthly")  # monthly, yearly
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id"), unique=True, nullable=False
-    )
-    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(
-        String, unique=True, nullable=True
-    )
-    status: Mapped[str] = mapped_column(String, nullable=False, default="inactive")
-    plan_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    current_period_start: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True
-    )
-    current_period_end: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True
-    )
-    characters_used: Mapped[int] = mapped_column(BigInteger, default=0)
-    quota_limit: Mapped[int] = mapped_column(BigInteger, default=0)
+    user = relationship("User", back_populates="subscriptions")
+    plan = relationship("Plan", back_populates="subscriptions")
 
-    user: Mapped["User"] = relationship("User", back_populates="subscription")
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    action = Column(
+        String, nullable=False
+    )  # e.g., "login", "register", "payment_success"
+    details = Column(Text, nullable=True)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="audit_logs")
