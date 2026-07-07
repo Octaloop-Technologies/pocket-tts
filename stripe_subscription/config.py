@@ -7,6 +7,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",
     )
 
     # Stripe API
@@ -15,15 +16,23 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = Field(default="")
     STRIPE_API_VERSION: str = Field(default="2025-02-24.acacia")
 
-    # Payment Links (Stripe Checkout Links)
-    STRIPE_PRICE_BASIC_MONTHLY: str = Field(default="")
-    STRIPE_PRICE_BASIC_YEARLY: str = Field(default="")
-    STRIPE_PRICE_PRO_MONTHLY: str = Field(default="")
-    STRIPE_PRICE_PRO_YEARLY: str = Field(default="")
-    STRIPE_PRICE_ENTERPRISE_MONTHLY: str = Field(default="")
-    STRIPE_PRICE_ENTERPRISE_YEARLY: str = Field(default="")
+    # Payment Links (frontend)
+    STRIPE_PRICE_BASIC_MONTHLY_LINK: str = Field(default="")
+    STRIPE_PRICE_BASIC_YEARLY_LINK: str = Field(default="")
+    STRIPE_PRICE_PRO_MONTHLY_LINK: str = Field(default="")
+    STRIPE_PRICE_PRO_YEARLY_LINK: str = Field(default="")
+    STRIPE_PRICE_ENTERPRISE_MONTHLY_LINK: str = Field(default="")
+    STRIPE_PRICE_ENTERPRISE_YEARLY_LINK: str = Field(default="")
 
-    # Stripe Portal
+    # Price IDs (backend mapping)
+    STRIPE_PRICE_BASIC_MONTHLY_ID: str = Field(default="")
+    STRIPE_PRICE_BASIC_YEARLY_ID: str = Field(default="")
+    STRIPE_PRICE_PRO_MONTHLY_ID: str = Field(default="")
+    STRIPE_PRICE_PRO_YEARLY_ID: str = Field(default="")
+    STRIPE_PRICE_ENTERPRISE_MONTHLY_ID: str = Field(default="")
+    STRIPE_PRICE_ENTERPRISE_YEARLY_ID: str = Field(default="")
+
+    # Customer Portal
     STRIPE_CUSTOMER_PORTAL_URL: str = Field(default="")
 
     # Redirect URLs

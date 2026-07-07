@@ -1,19 +1,27 @@
+"""
+Stripe subscription synchronization utilities.
+Handles fetching subscription data from Stripe and syncing to local DB.
+"""
+
+import logging
 from datetime import datetime
+from typing import Optional
 
 import stripe
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .logging import logger
 from .models import Plan, Subscription, User
 
+logger = logging.getLogger(__name__)
+
 stripe.api_version = settings.STRIPE_API_VERSION
-stripe.api_key = settings.STRIPE_SECRET_KEY  # ensure this is set in env
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-def get_plan_by_price_id(price_id: str, db: Session) -> Plan | None:
-    # Query Plan by stored price ids
-    plan = (
+def get_plan_by_price_id(price_id: str, db: Session) -> Optional[Plan]:
+    """Find a plan by its Stripe Price ID (matches either monthly or yearly)."""
+    return (
         db.query(Plan)
         .filter(
             (Plan.stripe_price_monthly == price_id)
@@ -21,120 +29,140 @@ def get_plan_by_price_id(price_id: str, db: Session) -> Plan | None:
         )
         .first()
     )
-    if not plan:
-        # Fallback: try to infer from environment (if you stored mapping)
-        # For now, log and return None
-        logger.warning(f"No plan found for price_id: {price_id}")
-    return plan
 
 
 def sync_subscription_from_stripe(
-    subscription_id: str, db: Session, user_id: int | None = None
-):
+    subscription_id: str, db: Session, user_id: Optional[int] = None
+) -> None:
+    """
+    Fetch a subscription from Stripe and create/update it in the local database.
+
+    Logs extensively at each step and raises exceptions on failure so the
+    webhook handler can return a 500 error to Stripe (which will retry).
+
+    Args:
+        subscription_id: The Stripe subscription ID (e.g., 'sub_...').
+        db: SQLAlchemy session.
+        user_id: Optional local user ID. If not provided, it will be resolved
+                 from the Stripe customer ID.
+    Raises:
+        ValueError: If required data is missing or inconsistent.
+        stripe.error.StripeError: If Stripe API calls fail.
+        Exception: For any other unexpected errors.
+    """
+    logger.info(f"Starting sync for subscription {subscription_id}")
+
+    # 1. Retrieve Stripe subscription
     try:
         stripe_sub = stripe.Subscription.retrieve(subscription_id)
-        local_sub = (
-            db.query(Subscription)
-            .filter_by(stripe_subscription_id=subscription_id)
-            .first()
+        logger.debug(
+            f"Stripe subscription retrieved: {stripe_sub.id}, status={stripe_sub.status}"
         )
+    except stripe.error.StripeError as e:
+        logger.error(
+            f"Stripe API error retrieving subscription {subscription_id}: {e}",
+            exc_info=True,
+        )
+        raise
 
-        # Extract timestamps safely
-        current_period_start = getattr(stripe_sub, "current_period_start", None)
-        current_period_end = getattr(stripe_sub, "current_period_end", None)
-
-        if not local_sub:
-            # If user_id not given, try to find via customer
-            if not user_id:
-                customer = stripe.Customer.retrieve(stripe_sub.customer)
-                user = db.query(User).filter_by(stripe_customer_id=customer.id).first()
-                if not user:
-                    logger.error(f"Cannot find user for subscription {subscription_id}")
-                    return
-                user_id = int(user.id) if hasattr(user.id, "__int__") else user.id
-
-            # Determine plan from price
-            items_data = (
-                stripe_sub.get("items", {}).get("data", [])
-                if hasattr(stripe_sub, "get")
-                else getattr(stripe_sub, "items", {})
+    # 2. Resolve local user if not provided
+    if user_id is None:
+        customer_id = getattr(stripe_sub, "customer", None)
+        if not customer_id:
+            logger.error(f"No customer ID in subscription {subscription_id}")
+            raise ValueError("Missing customer ID")
+        try:
+            customer = stripe.Customer.retrieve(customer_id)
+        except stripe.error.StripeError as e:
+            logger.error(
+                f"Failed to retrieve customer {customer_id}: {e}", exc_info=True
             )
-            if hasattr(items_data, "data"):
-                items_data = items_data.data
+            raise
+        user = db.query(User).filter_by(stripe_customer_id=customer.id).first()
+        if not user:
+            logger.error(f"No local user found for Stripe customer {customer.id}")
+            raise ValueError("Local user not found")
+        user_id = user.id
+        logger.info(f"Resolved user_id={user_id} from customer {customer.id}")
 
-            if not items_data:
-                logger.error(f"No items found for subscription {subscription_id}")
-                return
+    # 3. Extract price ID from subscription items
+    items = getattr(stripe_sub, "items", None)
+    if not items or not hasattr(items, "data") or not items.data:
+        logger.error(f"No items found in subscription {subscription_id}")
+        raise ValueError("Subscription has no items")
 
-            price = (
-                items_data[0].get("price")
-                if hasattr(items_data[0], "get")
-                else getattr(items_data[0], "price", {})
-            )
-            price_id = (
-                price.get("id") if hasattr(price, "get") else getattr(price, "id", "")
-            )
+    price = getattr(items.data[0], "price", None)
+    if not price:
+        logger.error(f"No price in first item for subscription {subscription_id}")
+        raise ValueError("No price in subscription item")
+    price_id = getattr(price, "id", None)
+    if not price_id:
+        logger.error(f"No price ID in price object for subscription {subscription_id}")
+        raise ValueError("Missing price ID")
 
-            plan = get_plan_by_price_id(price_id, db)
-            if not plan:
-                logger.error(f"Plan not found for price {price_id}")
-                return
+    logger.info(f"Price ID: {price_id}")
 
-            # Get interval
-            recurring = (
-                price.get("recurring")
-                if hasattr(price, "get")
-                else getattr(price, "recurring", {})
-            )
-            interval = (
-                recurring.get("interval")
-                if hasattr(recurring, "get")
-                else getattr(recurring, "interval", "month")
-            )
+    # 4. Find local plan
+    plan = get_plan_by_price_id(price_id, db)
+    if not plan:
+        logger.error(f"No local plan found for price ID {price_id}")
+        raise ValueError(f"Plan not found for price {price_id}")
 
-            local_sub = Subscription(
-                user_id=user_id,
-                plan_id=plan.id,
-                stripe_subscription_id=subscription_id,
-                status=getattr(stripe_sub, "status", "active"),
-                start_date=(
-                    datetime.fromtimestamp(current_period_start)
-                    if current_period_start
-                    else None
-                ),
-                end_date=(
-                    datetime.fromtimestamp(current_period_end)
-                    if current_period_end
-                    else None
-                ),
-                quota_limit=plan.quota_limit,
-                interval=interval,
-                characters_used=0,
-            )
-            db.add(local_sub)
-            logger.info(
-                f"Created new subscription {subscription_id} for user {user_id}"
-            )
-        else:
-            # Update existing subscription
-            local_sub.status = getattr(stripe_sub, "status", "active")
-            if current_period_start:
-                local_sub.start_date = datetime.fromtimestamp(current_period_start)
-            if current_period_end:
-                local_sub.end_date = datetime.fromtimestamp(current_period_end)
-            if (
-                local_sub.status == "active"
-                and getattr(local_sub, "status", "") != "active"
-            ):
-                local_sub.characters_used = 0  # reset usage on renewal
-            logger.info(
-                f"Updated subscription {subscription_id} for user {local_sub.user_id}"
-            )
+    # 5. Determine interval
+    recurring = getattr(price, "recurring", {})
+    interval = getattr(recurring, "interval", "monthly")
+    logger.info(f"Interval: {interval}")
 
+    # 6. Extract period timestamps
+    current_period_start = getattr(stripe_sub, "current_period_start", None)
+    current_period_end = getattr(stripe_sub, "current_period_end", None)
+    start_date = (
+        datetime.fromtimestamp(current_period_start) if current_period_start else None
+    )
+    end_date = (
+        datetime.fromtimestamp(current_period_end) if current_period_end else None
+    )
+
+    # 7. Look for existing local subscription
+    local_sub = (
+        db.query(Subscription).filter_by(stripe_subscription_id=subscription_id).first()
+    )
+
+    if local_sub:
+        logger.info(
+            f"Updating existing subscription {subscription_id} for user {local_sub.user_id}"
+        )
+        local_sub.status = getattr(stripe_sub, "status", "active")
+        local_sub.start_date = start_date
+        local_sub.end_date = end_date
+        # Reset usage for new billing period if status is active
+        if local_sub.status == "active":
+            local_sub.characters_used = 0
+    else:
+        logger.info(f"Creating new subscription {subscription_id} for user {user_id}")
+        local_sub = Subscription(
+            user_id=user_id,
+            plan_id=plan.id,
+            stripe_subscription_id=subscription_id,
+            status=getattr(stripe_sub, "status", "active"),
+            start_date=start_date,
+            end_date=end_date,
+            quota_limit=plan.quota_limit,
+            interval=interval,
+            characters_used=0,
+        )
+        db.add(local_sub)
+
+    # 8. Commit transaction
+    try:
         db.commit()
-        logger.info(f"Subscription {subscription_id} synced successfully")
+        logger.info(
+            f"Subscription {subscription_id} successfully synced for user {user_id}"
+        )
     except Exception as e:
         logger.error(
-            f"Error syncing subscription {subscription_id}: {str(e)}", exc_info=True
+            f"Database commit failed for subscription {subscription_id}: {e}",
+            exc_info=True,
         )
+        db.rollback()
         raise

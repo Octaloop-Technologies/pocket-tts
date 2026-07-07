@@ -1,4 +1,11 @@
+"""
+Stripe subscription API routes.
+Includes authentication, plan selection, payment links, webhooks, and billing portal.
+"""
+
+import logging
 from datetime import datetime
+from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import stripe
@@ -9,12 +16,62 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .database import get_db
 from .dependencies import get_current_user
-from .logging import logger
 from .models import AuditLog, Plan, Subscription, User
 from .stripe_utils import sync_subscription_from_stripe
 from .utils import generate_api_key, hash_password, verify_password
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/stripe", tags=["subscription"])
+
+
+# ----- Helpers -----
+def safe_get(obj, key, default=None):
+    """Safely get a value from a Stripe object (handles missing .get() method)."""
+    try:
+        return obj[key] if hasattr(obj, "__getitem__") else getattr(obj, key, default)
+    except (KeyError, AttributeError, TypeError):
+        return default
+
+
+def log_audit_safe(
+    db: Session,
+    user_id: Optional[int],
+    action: str,
+    details: Optional[dict] = None,
+    request: Optional[Request] = None,
+) -> None:
+    """Log an audit entry safely, handling missing request attributes."""
+    ip = (
+        request.client.host
+        if request and hasattr(request, "client") and request.client
+        else None
+    )
+    ua = request.headers.get("user-agent") if request else None
+    log_entry = AuditLog(
+        user_id=user_id,
+        action=action,
+        details=str(details) if details else None,
+        ip_address=ip,
+        user_agent=ua,
+    )
+    db.add(log_entry)
+    db.commit()
+    logger.info(f"Audit: user={user_id}, action={action}")
+
+
+def format_subscription_response(sub: Subscription) -> dict:
+    """Format subscription data for API responses."""
+    plan = sub.plan
+    remaining = max(sub.quota_limit - sub.characters_used, 0)
+    return {
+        "plan": plan.name if plan else "Unknown",
+        "status": sub.status,
+        "current_period_end": sub.end_date.isoformat() if sub.end_date else None,
+        "remaining_characters": remaining,
+        "interval": sub.interval,
+        "plan_tier": plan.tier if plan else None,
+    }
 
 
 # ----- Request Models -----
@@ -29,61 +86,31 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class PaymentLinkRequest(BaseModel):
-    plan: str  # 'basic', 'pro', 'enterprise'
-    interval: str  # 'monthly', 'yearly'
-
-
-# ----- Helper: Audit logging -----
-def log_audit(
-    db: Session,
-    user_id: int | None,
-    action: str,
-    details: dict = None,
-    request: Request = None,
-):
-    log_entry = AuditLog(
-        user_id=user_id,
-        action=action,
-        details=str(details) if details else None,
-        ip_address=request.client.host if request else None,
-        user_agent=request.headers.get("user-agent") if request else None,
-    )
-    db.add(log_entry)
-    db.commit()
-    logger.info(f"Audit: user={user_id}, action={action}")
-
-
-# ----- Endpoints -----
+# ----- Auth Endpoints -----
 @router.post("/register")
 async def register_user(
     req: RegisterRequest, request: Request, db: Session = Depends(get_db)
 ):
     logger.info(f"Registration attempt for email: {req.email}")
-    try:
-        existing = db.query(User).filter_by(email=req.email).first()
-        if existing:
-            logger.warning(f"Email already registered: {req.email}")
-            raise HTTPException(400, "Email already registered")
-        api_key = generate_api_key()
-        password_hash = hash_password(req.password)
-        user = User(
-            email=req.email,
-            password_hash=password_hash,
-            api_key=api_key,
-            created_at=datetime.utcnow(),
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        log_audit(db, user.id, "register", {"email": req.email}, request)
-        logger.info(f"User registered: {user.id} ({req.email})")
-        return {"api_key": api_key, "user_id": user.id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Registration error: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Internal server error")
+    existing = db.query(User).filter_by(email=req.email).first()
+    if existing:
+        logger.warning(f"Email already registered: {req.email}")
+        raise HTTPException(400, "Email already registered")
+
+    api_key = generate_api_key()
+    password_hash = hash_password(req.password)
+    user = User(
+        email=req.email,
+        password_hash=password_hash,
+        api_key=api_key,
+        created_at=datetime.utcnow(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    log_audit_safe(db, user.id, "register", {"email": req.email}, request)
+    logger.info(f"User registered: {user.id} ({req.email})")
+    return {"api_key": api_key, "user_id": user.id}
 
 
 @router.post("/login")
@@ -91,135 +118,71 @@ async def login_user(
     req: LoginRequest, request: Request, db: Session = Depends(get_db)
 ):
     logger.info(f"Login attempt for email: {req.email}")
-    try:
-        user = db.query(User).filter_by(email=req.email).first()
-        if not user or not verify_password(req.password, user.password_hash):
-            logger.warning(f"Invalid credentials for {req.email}")
-            raise HTTPException(401, "Invalid credentials")
-        user.last_login = datetime.utcnow()
-        db.commit()
-        log_audit(db, user.id, "login", None, request)
-        logger.info(f"User logged in: {user.id} ({req.email})")
-        return {"api_key": user.api_key, "user_id": user.id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Login error: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Internal server error")
+    user = db.query(User).filter_by(email=req.email).first()
+    if not user or not verify_password(req.password, user.password_hash):
+        logger.warning(f"Invalid credentials for {req.email}")
+        raise HTTPException(401, "Invalid credentials")
+
+    user.last_login = datetime.utcnow()
+    db.commit()
+    log_audit_safe(db, user.id, "login", None, request)
+    logger.info(f"User logged in: {user.id} ({req.email})")
+    return {"api_key": user.api_key, "user_id": user.id}
 
 
+# ----- Subscription Endpoints -----
 @router.get("/subscription")
 async def get_subscription(
     user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    try:
-        # Extract user ID for safer typing
-        user_id = int(user.id) if hasattr(user.id, "__int__") else user.id
+    user_id = int(user.id) if hasattr(user.id, "__int__") else user.id
+    local_sub = db.query(Subscription).filter_by(user_id=user_id).first()
 
-        # First, check local database for subscription
-        local_sub = db.query(Subscription).filter_by(user_id=user_id).first()
-        logger.info(
-            f"Checking subscription for user {user_id}: found local_sub={local_sub is not None}"
+    if local_sub and local_sub.status == "active":
+        return format_subscription_response(local_sub)
+
+    # Try to find via Stripe by email
+    stripe_customer_id = getattr(user, "stripe_customer_id", None)
+    if not stripe_customer_id:
+        customers = stripe.Customer.list(email=user.email, limit=1)
+        if customers.data:
+            customer = customers.data[0]
+            user.stripe_customer_id = customer.id
+            stripe_customer_id = customer.id
+            db.commit()
+            logger.info(
+                f"Stored stripe_customer_id for user {user_id}: {stripe_customer_id}"
+            )
+
+    if stripe_customer_id:
+        stripe_subs = stripe.Subscription.list(
+            customer=stripe_customer_id, status="active", limit=1
         )
+        if stripe_subs.data:
+            stripe_sub = stripe_subs.data[0]
+            sync_subscription_from_stripe(stripe_sub.id, db, user_id=user_id)
+            local_sub = db.query(Subscription).filter_by(user_id=user_id).first()
+            if local_sub:
+                return format_subscription_response(local_sub)
 
-        # If user has stripe_customer_id, verify active subscription from Stripe
-        stripe_customer_id = getattr(user, "stripe_customer_id", None)
-        logger.info(f"User {user_id} stripe_customer_id: {stripe_customer_id}")
-
-        if stripe_customer_id is not None and stripe_customer_id:
-            try:
-                logger.info(
-                    f"Querying Stripe for active subscriptions for customer {stripe_customer_id}"
-                )
-                stripe_subs = stripe.Subscription.list(
-                    customer=stripe_customer_id, status="active", limit=1
-                )
-                logger.info(
-                    f"Stripe returned {len(stripe_subs.data)} active subscriptions"
-                )
-
-                if stripe_subs.data:
-                    # Found active subscription on Stripe
-                    stripe_sub = stripe_subs.data[0]
-                    logger.info(f"Found active Stripe subscription: {stripe_sub.id}")
-
-                    # Sync it to local database
-                    from .stripe_utils import sync_subscription_from_stripe
-
-                    sync_subscription_from_stripe(stripe_sub.id, db, user_id=user_id)
-                    # Refresh local_sub after sync
-                    local_sub = (
-                        db.query(Subscription).filter_by(user_id=user_id).first()
-                    )
-                    logger.info(
-                        f"Synced active subscription from Stripe for user {user_id}: {local_sub is not None}"
-                    )
-                else:
-                    logger.info(
-                        f"No active Stripe subscriptions found for customer {stripe_customer_id}"
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"Error checking Stripe for user {user_id}: {str(e)}", exc_info=True
-                )
-                # Continue with local database info if Stripe check fails
-
-        if not local_sub:
-            logger.info(f"No subscription found for user {user_id}")
-            return {"plan": None, "status": "none", "remaining_characters": 0}
-
-        # Extract values safely from ORM object
-        status = getattr(local_sub, "status", "unknown")
-        quota_limit = getattr(local_sub, "quota_limit", 0)
-        characters_used = getattr(local_sub, "characters_used", 0)
-        end_date = getattr(local_sub, "end_date", None)
-        interval = getattr(local_sub, "interval", "unknown")
-        plan = getattr(local_sub, "plan", None)
-
-        remaining = max(quota_limit - characters_used, 0)
-        plan_name = plan.name if plan else "Unknown"
-        plan_tier = plan.tier if plan else None
-
-        logger.info(
-            f"User {user_id} subscription: status={status}, plan={plan_name}, remaining={remaining}"
-        )
-
-        return {
-            "plan": plan_name,
-            "status": status,
-            "current_period_end": (end_date.isoformat() if end_date else None),
-            "remaining_characters": remaining,
-            "interval": interval,
-            "plan_tier": plan_tier,
-        }
-    except Exception as e:
-        logger.error(
-            f"Error fetching subscription for user {user.id}: {str(e)}", exc_info=True
-        )
-        raise HTTPException(500, "Failed to fetch subscription")
+    return {"plan": None, "status": "none", "remaining_characters": 0}
 
 
 @router.get("/plans")
 async def get_plans(db: Session = Depends(get_db)):
-    """Fetch all available plans with their pricing."""
-    try:
-        plans = db.query(Plan).filter_by(is_active=True).all()
-        result = []
-        for plan in plans:
-            result.append(
-                {
-                    "tier": plan.tier,
-                    "name": plan.name,
-                    "monthly_price": plan.monthly_price,
-                    "yearly_price": plan.yearly_price,
-                    "quota_limit": plan.quota_limit,
-                }
-            )
-        logger.info(f"Returned {len(result)} plans")
-        return {"plans": result}
-    except Exception as e:
-        logger.error(f"Error fetching plans: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Failed to fetch plans")
+    plans = db.query(Plan).filter_by(is_active=True).all()
+    return {
+        "plans": [
+            {
+                "tier": p.tier,
+                "name": p.name,
+                "monthly_price": p.monthly_price,
+                "yearly_price": p.yearly_price,
+                "quota_limit": p.quota_limit,
+            }
+            for p in plans
+        ]
+    }
 
 
 @router.get("/payment-link")
@@ -227,161 +190,276 @@ async def get_payment_link(
     plan: str,
     interval: str,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
 ):
+    """
+    Return a Stripe Payment Link for the requested plan.
+
+    The link includes:
+      - client_reference_id
+      - prefilled_email
+      - redirect back to the application after payment
+    """
+
+    key = f"STRIPE_PRICE_{plan.upper()}_{interval.upper()}_LINK"
+    payment_link = getattr(settings, key, None)
+
+    if not payment_link:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No payment link configured for {plan}/{interval}.",
+        )
+
+    parsed = urlparse(payment_link)
+    query = parse_qs(parsed.query)
+
+    query["client_reference_id"] = [str(user.id)]
+    query["prefilled_email"] = [user.email]
+
+    #
+    # Your frontend route after successful payment.
+    #
+    # Example:
+    #   http://localhost:3000/tts
+    #   https://yourdomain.com/tts
+    #
+    if getattr(settings, "STRIPE_PAYMENT_SUCCESS_URL", None):
+        query["redirect_url"] = [settings.STRIPE_PAYMENT_SUCCESS_URL]
+
+    payment_link = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+
     logger.info(
-        f"Payment link requested: plan={plan}, interval={interval}, user={user.id}"
+        "Generated payment link for user %s (%s %s)",
+        user.id,
+        plan,
+        interval,
     )
+
+    return {"url": payment_link}
+
+
+# ----- Webhook Handlers (Refactored with getattr) -----
+def handle_checkout_completed(
+    data,
+    db: Session,
+    request: Request,
+) -> None:
+    """
+    Handle checkout.session.completed.
+
+    This webhook links the Stripe customer to the local user,
+    synchronizes the subscription and records an audit event.
+    """
+
+    logger.info("Processing checkout.session.completed")
+
+    user_id = safe_get(data, "client_reference_id")
+    if not user_id:
+        logger.warning("Checkout session missing client_reference_id.")
+        return
+
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if user is None:
+        logger.warning("User %s not found.", user_id)
+        return
+
+    stripe_subscription_id = safe_get(data, "subscription")
+    if not stripe_subscription_id:
+        logger.warning("Checkout session missing subscription id.")
+        return
+
+    stripe_customer_id = safe_get(data, "customer")
+    if stripe_customer_id and user.stripe_customer_id != stripe_customer_id:
+        user.stripe_customer_id = stripe_customer_id
+
     try:
-        # Build env key matching the .env format: STRIPE_PRICE_BASIC_MONTHLY
-        key = f"STRIPE_PRICE_{plan.upper()}_{interval.upper()}"
-        link = getattr(settings, key, None)
-        if not link:
-            logger.error(f"Payment link not configured for {plan}/{interval}")
-            raise HTTPException(404, "Payment link not found")
-        # Add client_reference_id and prefill email
-        parsed = urlparse(link)
-        query = parse_qs(parsed.query)
-        query["client_reference_id"] = [str(user.id)]
-        query["prefilled_email"] = [user.email]
-        new_query = urlencode(query, doseq=True)
-        new_link = urlunparse(parsed._replace(query=new_query))
-        logger.info(f"Generated payment link for user {user.id}: {new_link}")
-        return {"url": new_link}
-    except HTTPException:
+        sync_subscription_from_stripe(
+            stripe_subscription_id,
+            db,
+            user_id=user.id,
+        )
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed syncing subscription %s",
+            stripe_subscription_id,
+        )
         raise
-    except Exception as e:
-        logger.error(f"Error generating payment link: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Failed to generate payment link")
+
+    try:
+        log_audit_safe(
+            db=db,
+            user_id=user.id,
+            action="payment_success",
+            details={
+                "subscription": stripe_subscription_id,
+                "session": safe_get(data, "id"),
+            },
+            request=request,
+        )
+    except Exception:
+        logger.exception("Failed writing audit log.")
+
+    logger.info(
+        "Checkout completed successfully for user %s",
+        user.id,
+    )
+
+    return
+
+
+def handle_subscription_updated(
+    data,
+    db: Session,
+    request: Request,
+) -> None:
+    """
+    Synchronize an updated Stripe subscription.
+    """
+
+    del request
+
+    stripe_subscription_id = safe_get(data, "id")
+    if not stripe_subscription_id:
+        logger.warning("subscription.updated missing id.")
+        return
+
+    try:
+        sync_subscription_from_stripe(
+            stripe_subscription_id,
+            db,
+        )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Unable to synchronize subscription %s",
+            stripe_subscription_id,
+        )
+        raise
+
+
+def handle_subscription_deleted(
+    data,
+    db: Session,
+    request: Request,
+) -> None:
+    """
+    Synchronize a deleted Stripe subscription.
+    """
+
+    del request
+
+    stripe_subscription_id = safe_get(data, "id")
+    if not stripe_subscription_id:
+        logger.warning("subscription.deleted missing id.")
+        return
+
+    try:
+        sync_subscription_from_stripe(
+            stripe_subscription_id,
+            db,
+        )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Unable to synchronize deleted subscription %s",
+            stripe_subscription_id,
+        )
+        raise
+
+
+# Map event types to handlers
+WEBHOOK_HANDLERS = {
+    "checkout.session.completed": handle_checkout_completed,
+    "customer.subscription.updated": handle_subscription_updated,
+    "customer.subscription.deleted": handle_subscription_deleted,
+}
 
 
 @router.post("/webhook")
-async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+async def stripe_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
     payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-    logger.info("Webhook received")
+    signature = request.headers.get("stripe-signature")
+
     try:
         event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+            payload=payload,
+            sig_header=signature,
+            secret=settings.STRIPE_WEBHOOK_SECRET,
         )
-    except ValueError as e:
-        logger.error(f"Invalid payload: {e}")
+    except ValueError:
+        logger.exception("Invalid Stripe webhook payload.")
         raise HTTPException(400, "Invalid payload")
-    except stripe.SignatureVerificationError as e:
-        logger.error(f"Invalid signature: {e}")
+
+    except stripe.SignatureVerificationError:
+        logger.exception("Invalid Stripe webhook signature.")
         raise HTTPException(400, "Invalid signature")
-    # Process event
+
+    event_type = event["type"]
+    handler = WEBHOOK_HANDLERS.get(event_type)
+
+    if handler is None:
+        logger.debug("Ignoring event %s", event_type)
+        return {"status": "ignored"}
+
+    logger.info(
+        "Received Stripe event %s (%s)",
+        event_type,
+        event["id"],
+    )
+
     try:
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
-            user_id = session.get("client_reference_id")
-            if user_id:
-                user = db.query(User).filter_by(id=int(user_id)).first()
-                if user:
-                    stripe_sub_id = session["subscription"]
-                    stripe_customer_id = session.get("customer")
-                    user_int_id = (
-                        int(user.id) if hasattr(user.id, "__int__") else user.id
-                    )
+        handler(
+            event["data"]["object"],
+            db,
+            request,
+        )
+    except Exception:
+        logger.exception(
+            "Webhook handler failed for %s",
+            event_type,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook processing failed",
+        )
 
-                    # Store stripe_customer_id on user for future lookups
-                    if stripe_customer_id:
-                        user_stripe_cust_id = getattr(user, "stripe_customer_id", None)
-                        if not user_stripe_cust_id:
-                            user.stripe_customer_id = stripe_customer_id
-                            db.commit()
-                            logger.info(
-                                f"Stored stripe_customer_id for user {user_int_id}: {stripe_customer_id}"
-                            )
-                        else:
-                            logger.info(
-                                f"User {user_int_id} already has stripe_customer_id: {user_stripe_cust_id}"
-                            )
-
-                    sync_subscription_from_stripe(
-                        stripe_sub_id, db, user_id=user_int_id
-                    )
-                    log_audit(
-                        db,
-                        user_int_id,
-                        "payment_success",
-                        {"session_id": session["id"], "subscription": stripe_sub_id},
-                        request,
-                    )
-                    logger.info(f"Payment success for user {user_int_id}")
-                else:
-                    logger.warning(f"User not found for client_reference_id: {user_id}")
-            else:
-                logger.warning("No client_reference_id in checkout session")
-        elif event["type"] in (
-            "customer.subscription.updated",
-            "customer.subscription.deleted",
-        ):
-            stripe_sub_id = event["data"]["object"]["id"]
-            sync_subscription_from_stripe(stripe_sub_id, db)
-        else:
-            logger.info(f"Unhandled event type: {event['type']}")
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Webhook processing error: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Webhook processing failed")
+    return {"status": "ok"}
 
 
-# DEBUG: Manual webhook retry endpoint (for testing webhook failures)
-@router.post("/debug/sync-from-stripe")
-async def debug_sync_from_stripe(email: str, db: Session = Depends(get_db)):
-    """DEBUG ONLY: Manually sync user subscriptions from Stripe by email.
+# ----- Billing Portal -----
+@router.get("/manage-billing")
+async def manage_billing(user: User = Depends(get_current_user)):
+    if not user.stripe_customer_id:
+        raise HTTPException(404, "No Stripe customer found for this user")
+    portal_url = settings.STRIPE_CUSTOMER_PORTAL_URL
+    if not portal_url:
+        raise HTTPException(500, "Customer portal URL not configured")
+    return {"portal_url": portal_url + "?prefilled_email=" + user.email}
 
-    This helps recover from webhook failures. Should be removed in production.
-    Usage: POST /stripe/debug/sync-from-stripe?email=user@example.com
-    """
+
+# ----- Debug -----
+@router.post("/debug/sync")
+async def debug_sync_subscription(email: str, db: Session = Depends(get_db)):
     logger.warning(f"DEBUG: Manual sync requested for {email}")
-
     user = db.query(User).filter_by(email=email).first()
     if not user:
         raise HTTPException(404, f"User {email} not found")
 
-    user_id = int(user.id) if hasattr(user.id, "__int__") else user.id
-    logger.info(f"DEBUG: Manual sync for user {user_id} ({email})")
+    customers = stripe.Customer.list(email=email, limit=1)
+    if not customers.data:
+        return {"status": "error", "message": "No Stripe customer found"}
+    customer = customers.data[0]
+    user.stripe_customer_id = customer.id
+    db.commit()
 
-    # Query all subscriptions from Stripe for this email
-    # (without stripe_customer_id, we search by email in checkout sessions)
-    try:
-        # List all customers with this email
-        customers = stripe.Customer.list(email=email, limit=10)
-        logger.info(
-            f"DEBUG: Found {len(customers.data)} Stripe customers with email {email}"
-        )
-
-        synced_count = 0
-        for customer in customers.data:
-            stripe_customer_id = customer.id
-            logger.info(f"DEBUG: Checking customer {stripe_customer_id}")
-
-            # Store stripe_customer_id on user
-            if not getattr(user, "stripe_customer_id", None):
-                user.stripe_customer_id = stripe_customer_id
-                db.commit()
-                logger.info(f"DEBUG: Stored stripe_customer_id on user {user_id}")
-
-            # Get active subscriptions for this customer
-            subs = stripe.Subscription.list(
-                customer=stripe_customer_id, status="active", limit=10
-            )
-            logger.info(f"DEBUG: Found {len(subs.data)} active subscriptions")
-
-            for stripe_sub in subs.data:
-                logger.info(f"DEBUG: Syncing subscription {stripe_sub.id}")
-                sync_subscription_from_stripe(stripe_sub.id, db, user_id=user_id)
-                synced_count += 1
-
-        return {
-            "status": "ok",
-            "email": email,
-            "user_id": user_id,
-            "stripe_customer_id": getattr(user, "stripe_customer_id", None),
-            "subscriptions_synced": synced_count,
-        }
-    except Exception as e:
-        logger.error(f"DEBUG: Error syncing from Stripe: {str(e)}", exc_info=True)
-        raise HTTPException(500, f"Sync failed: {str(e)}")
+    subs = stripe.Subscription.list(customer=customer.id, status="active", limit=1)
+    if not subs.data:
+        return {"status": "ok", "message": "No active subscriptions"}
+    sync_subscription_from_stripe(subs.data[0].id, db, user_id=user.id)
+    return {"status": "ok", "message": f"Synced for user {user.id}"}

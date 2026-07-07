@@ -30,16 +30,12 @@ from pocket_tts.default_parameters import (
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
-
-# ----- Stripe subscription integration -----
-from stripe_subscription import router as stripe_router
 from stripe_subscription.config import settings
 from stripe_subscription.database import Base, engine, get_db
 from stripe_subscription.dependencies import get_active_subscription, get_current_user
 from stripe_subscription.logging import logger
 from stripe_subscription.models import Plan, Subscription, User
-
-# -------------------------------------------
+from stripe_subscription.routes import router as stripe_router
 
 logger = logging.getLogger(__name__)
 
@@ -84,49 +80,35 @@ def startup():
                     name="Basic",
                     tier="basic",
                     monthly_price=500,
-                    yearly_price=4800,
-                    quota_limit=50000,
-                    stripe_price_monthly=getattr(
-                        settings, "STRIPE_PRICE_BASIC_MONTHLY", ""
-                    )
-                    or "",
-                    stripe_price_yearly=getattr(
-                        settings, "STRIPE_PRICE_BASIC_YEARLY", ""
-                    )
-                    or "",
+                    yearly_price=4_800,
+                    quota_limit=50_000,
+                    stripe_price_monthly=settings.STRIPE_PRICE_BASIC_MONTHLY_ID or "",
+                    stripe_price_yearly=settings.STRIPE_PRICE_BASIC_YEARLY_ID or "",
                 ),
                 Plan(
                     name="Pro",
                     tier="pro",
-                    monthly_price=1500,
-                    yearly_price=14400,
-                    quota_limit=250000,
-                    stripe_price_monthly=getattr(
-                        settings, "STRIPE_PRICE_PRO_MONTHLY", ""
-                    )
-                    or "",
-                    stripe_price_yearly=getattr(settings, "STRIPE_PRICE_PRO_YEARLY", "")
-                    or "",
+                    monthly_price=1_500,
+                    yearly_price=14_400,
+                    quota_limit=250_000,
+                    stripe_price_monthly=settings.STRIPE_PRICE_PRO_MONTHLY_ID or "",
+                    stripe_price_yearly=settings.STRIPE_PRICE_PRO_YEARLY_ID or "",
                 ),
                 Plan(
                     name="Enterprise",
                     tier="enterprise",
-                    monthly_price=5000,
-                    yearly_price=48000,
-                    quota_limit=1500000,
-                    stripe_price_monthly=getattr(
-                        settings, "STRIPE_PRICE_ENTERPRISE_MONTHLY", ""
-                    )
+                    monthly_price=5_000,
+                    yearly_price=48_000,
+                    quota_limit=1_500_000,
+                    stripe_price_monthly=settings.STRIPE_PRICE_ENTERPRISE_MONTHLY_ID
                     or "",
-                    stripe_price_yearly=getattr(
-                        settings, "STRIPE_PRICE_ENTERPRISE_YEARLY", ""
-                    )
+                    stripe_price_yearly=settings.STRIPE_PRICE_ENTERPRISE_YEARLY_ID
                     or "",
                 ),
             ]
             db.add_all(plans)
             db.commit()
-            logger.info("Default plans seeded.")
+            logger.info("Default plans seeded with Stripe Price IDs.")
     except Exception as e:
         logger.error(f"Error seeding plans: {str(e)}", exc_info=True)
     finally:
