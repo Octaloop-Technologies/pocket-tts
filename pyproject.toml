@@ -24,6 +24,8 @@ dependencies = [
     "stripe>=15.3.0",
     "sqlalchemy>=2.0.51",
     "pydantic-settings>=2.14.2",
+    "secure",
+    "structlog",
 ]
 
 [project.optional-dependencies]

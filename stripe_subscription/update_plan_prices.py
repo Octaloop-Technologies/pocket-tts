@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Fix: Update plan records with correct Stripe price IDs.
 """
@@ -32,15 +31,23 @@ def update_price_ids():
 
         price_map = {}
         for price in prices.data:
-            # Extract metadata to understand plan tier and interval
-            product = stripe.Product.retrieve(price.product)
-            metadata = product.get("metadata", {})
+            # Resolve product: if it's a string ID, fetch it; else use the expanded object
+            product_id_or_obj = price.product
+            if isinstance(product_id_or_obj, str):
+                product = stripe.Product.retrieve(product_id_or_obj)
+            else:
+                product = product_id_or_obj  # already expanded
+
+            # Access metadata as attribute (not dict .get())
+            metadata = getattr(product, "metadata", {})
             tier = metadata.get("tier", "").lower()
 
             if not tier:
                 continue
 
-            interval = price.recurring.get("interval", "") if price.recurring else ""
+            # Check if recurring exists and get interval
+            recurring = getattr(price, "recurring", None)
+            interval = recurring.get("interval", "") if recurring else ""
 
             key = f"{tier}_{interval}"
             price_map[key] = price.id
@@ -57,7 +64,6 @@ def update_price_ids():
         for plan in plans:
             tier = plan.tier.lower()
 
-            # Look for monthly and yearly prices
             monthly_key = f"{tier}_month"
             yearly_key = f"{tier}_year"
 
@@ -72,7 +78,6 @@ def update_price_ids():
         db.commit()
         print("\n✅ Updated all plans!")
 
-        # Show final state
         print("\n📊 Final plan configuration:")
         for plan in db.query(Plan).all():
             print(f"   {plan.name}:")

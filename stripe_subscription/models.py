@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
@@ -22,8 +22,12 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     api_key = Column(String, unique=True, index=True, nullable=False)
     stripe_customer_id = Column(String, nullable=True, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
+    )
     last_login = Column(DateTime, nullable=True)
 
     subscriptions = relationship("Subscription", back_populates="user")
@@ -41,8 +45,12 @@ class Plan(Base):
     stripe_price_monthly = Column(String, nullable=True)  # future use
     stripe_price_yearly = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
+    )
 
     subscriptions = relationship("Subscription", back_populates="plan")
 
@@ -61,8 +69,12 @@ class Subscription(Base):
     characters_used = Column(BigInteger, default=0)
     quota_limit = Column(BigInteger, nullable=False)
     interval = Column(String, nullable=False, default="monthly")  # monthly, yearly
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
+    )
 
     user = relationship("User", back_populates="subscriptions")
     plan = relationship("Plan", back_populates="subscriptions")
@@ -78,6 +90,6 @@ class AuditLog(Base):
     details = Column(Text, nullable=True)
     ip_address = Column(String, nullable=True)
     user_agent = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="audit_logs")

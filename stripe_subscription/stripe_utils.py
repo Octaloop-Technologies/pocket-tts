@@ -15,8 +15,9 @@ from .models import Plan, Subscription, User
 
 logger = logging.getLogger(__name__)
 
+# ── Fix: use raw string from SecretStr ──
 stripe.api_version = settings.STRIPE_API_VERSION
-stripe.api_key = settings.STRIPE_SECRET_KEY
+stripe.api_key = settings.get_stripe_secret_key()  # ← extract raw value
 
 
 def get_plan_by_price_id(price_id: str, db: Session) -> Optional[Plan]:
@@ -36,19 +37,6 @@ def sync_subscription_from_stripe(
 ) -> None:
     """
     Fetch a subscription from Stripe and create/update it in the local database.
-
-    Logs extensively at each step and raises exceptions on failure so the
-    webhook handler can return a 500 error to Stripe (which will retry).
-
-    Args:
-        subscription_id: The Stripe subscription ID (e.g., 'sub_...').
-        db: SQLAlchemy session.
-        user_id: Optional local user ID. If not provided, it will be resolved
-                 from the Stripe customer ID.
-    Raises:
-        ValueError: If required data is missing or inconsistent.
-        stripe.error.StripeError: If Stripe API calls fail.
-        Exception: For any other unexpected errors.
     """
     logger.info(f"Starting sync for subscription {subscription_id}")
 
@@ -58,7 +46,7 @@ def sync_subscription_from_stripe(
         logger.debug(
             f"Stripe subscription retrieved: {stripe_sub.id}, status={stripe_sub.status}"
         )
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         logger.error(
             f"Stripe API error retrieving subscription {subscription_id}: {e}",
             exc_info=True,
@@ -73,7 +61,7 @@ def sync_subscription_from_stripe(
             raise ValueError("Missing customer ID")
         try:
             customer = stripe.Customer.retrieve(customer_id)
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             logger.error(
                 f"Failed to retrieve customer {customer_id}: {e}", exc_info=True
             )
@@ -82,7 +70,7 @@ def sync_subscription_from_stripe(
         if not user:
             logger.error(f"No local user found for Stripe customer {customer.id}")
             raise ValueError("Local user not found")
-        user_id = user.id
+        user_id = user.id  # type: ignore
         logger.info(f"Resolved user_id={user_id} from customer {customer.id}")
 
     # 3. Extract price ID from subscription items
@@ -132,12 +120,11 @@ def sync_subscription_from_stripe(
         logger.info(
             f"Updating existing subscription {subscription_id} for user {local_sub.user_id}"
         )
-        local_sub.status = getattr(stripe_sub, "status", "active")
-        local_sub.start_date = start_date
-        local_sub.end_date = end_date
-        # Reset usage for new billing period if status is active
-        if local_sub.status == "active":
-            local_sub.characters_used = 0
+        local_sub.status = getattr(stripe_sub, "status", "active")  # type: ignore
+        local_sub.start_date = start_date  # type: ignore
+        local_sub.end_date = end_date  # type: ignore
+        if local_sub.status == "active":  # type: ignore
+            local_sub.characters_used = 0  # type: ignore
     else:
         logger.info(f"Creating new subscription {subscription_id} for user {user_id}")
         local_sub = Subscription(

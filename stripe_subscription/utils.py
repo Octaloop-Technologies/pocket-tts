@@ -1,24 +1,19 @@
-import hashlib
-import os
-import secrets
+"""
+Utility functions for subscription responses and Stripe helpers.
+"""
 
-# Temporary: using SHA-256 with a static salt (not for production)
-# This avoids bcrypt dependency. We'll replace with proper bcrypt later.
-_SALT = os.getenv("PASSWORD_SALT", "pocket-tts-salt-2026").encode()
+from .models import Subscription
 
 
-def hash_password(password: str) -> str:
-    """Hash password using SHA-256 with a static salt (temporary)."""
-    hash_obj = hashlib.sha256()
-    hash_obj.update(_SALT)
-    hash_obj.update(password.encode())
-    return hash_obj.hexdigest()
-
-
-def verify_password(password: str, hashed: str) -> bool:
-    """Verify password against stored hash."""
-    return hash_password(password) == hashed
-
-
-def generate_api_key() -> str:
-    return f"sk_{secrets.token_urlsafe(32)}"
+def format_subscription_response(sub: Subscription) -> dict:
+    """Format subscription data for API responses."""
+    plan = sub.plan
+    remaining = max(sub.quota_limit - sub.characters_used, 0)
+    return {
+        "plan": plan.name if plan else "Unknown",
+        "status": sub.status,
+        "current_period_end": sub.end_date.isoformat() if sub.end_date else None,  # type: ignore
+        "remaining_characters": remaining,
+        "interval": sub.interval,
+        "plan_tier": plan.tier if plan else None,
+    }

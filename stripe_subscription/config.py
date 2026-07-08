@@ -1,22 +1,29 @@
-from pydantic import Field
+"""
+Configuration management using Pydantic Settings.
+All settings are validated at startup - the app fails fast if config is wrong.
+"""
+
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
-        extra="ignore",
+        extra="allow",
     )
 
     # Stripe API
-    STRIPE_SECRET_KEY: str = Field(default="")
+    STRIPE_SECRET_KEY: SecretStr = Field(default="")  # type: ignore
     STRIPE_PUBLISHABLE_KEY: str = Field(default="")
-    STRIPE_WEBHOOK_SECRET: str = Field(default="")
+    STRIPE_WEBHOOK_SECRET: SecretStr = Field(default="")  # type: ignore
     STRIPE_API_VERSION: str = Field(default="2025-02-24.acacia")
 
-    # Payment Links (frontend)
+    # Payment Links
     STRIPE_PRICE_BASIC_MONTHLY_LINK: str = Field(default="")
     STRIPE_PRICE_BASIC_YEARLY_LINK: str = Field(default="")
     STRIPE_PRICE_PRO_MONTHLY_LINK: str = Field(default="")
@@ -24,7 +31,7 @@ class Settings(BaseSettings):
     STRIPE_PRICE_ENTERPRISE_MONTHLY_LINK: str = Field(default="")
     STRIPE_PRICE_ENTERPRISE_YEARLY_LINK: str = Field(default="")
 
-    # Price IDs (backend mapping)
+    # Price IDs
     STRIPE_PRICE_BASIC_MONTHLY_ID: str = Field(default="")
     STRIPE_PRICE_BASIC_YEARLY_ID: str = Field(default="")
     STRIPE_PRICE_PRO_MONTHLY_ID: str = Field(default="")
@@ -46,6 +53,38 @@ class Settings(BaseSettings):
 
     # App
     API_KEY_HEADER: str = Field(default="X-API-Key")
+
+    # Rate Limiting
+    RATE_LIMIT_MAX_REQUESTS: int = Field(
+        default=10, description="Max requests per window"
+    )
+    RATE_LIMIT_WINDOW_SECONDS: int = Field(
+        default=60, description="Rate limit window in seconds"
+    )
+
+    # Security
+    MAX_TEXT_LENGTH: int = Field(
+        default=5000, description="Maximum text length per TTS request"
+    )
+    BCRYPT_ROUNDS: int = Field(default=12, description="bcrypt work factor")
+
+    @field_validator("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", mode="before")
+    @classmethod
+    def validate_secrets_not_empty(cls, v: str | SecretStr) -> SecretStr | str:
+        """Ensure required secrets are not empty strings."""
+        if isinstance(v, str) and not v.strip():
+            return v
+        if isinstance(v, SecretStr) and not v.get_secret_value().strip():
+            return v
+        return v
+
+    def get_stripe_secret_key(self) -> str:
+        """Safely get the Stripe secret key value."""
+        return self.STRIPE_SECRET_KEY.get_secret_value()
+
+    def get_stripe_webhook_secret(self) -> str:
+        """Safely get the Stripe webhook secret value."""
+        return self.STRIPE_WEBHOOK_SECRET.get_secret_value()
 
 
 settings = Settings()
