@@ -27,6 +27,8 @@ dependencies = [
     "secure>=2.0.1",
     "structlog>=26.1.0",
     "bcrypt",
+    "python-jose[cryptography]",
+    "passlib[bcrypt]",
 ]
 
 [project.optional-dependencies]

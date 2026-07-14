@@ -10,8 +10,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script type="module">
-    import { setDefaultText } from "{{ url_for('static', path='/js/tts.js') }}";
-    setDefaultText({{ default_text|tojson }});
-</script>
+    {# Pass default text via a data attribute – no inline script #}
+    <script id="config" type="module" data-default-text="{{ default_text|tojson }}"></script>
+    <script type="module" src="{{ url_for('static', path='/js/app.js') }}"></script> 
 {% endblock %}

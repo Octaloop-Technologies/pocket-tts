@@ -1,7 +1,17 @@
 import { getApiKey, switchView } from './utils.js';
 import { initAuth } from './auth.js';
 import { initPlan } from './plan.js';
-import { initTTS, showApp } from './tts.js';
+import { initTTS, showApp, setDefaultText } from './tts.js';
+
+let defaultText = "";
+
+try{
+    defaultText = JSON.parse(document.currentScript.dataset.defaultText);
+}
+catch (exception) {
+    console.warn("Could not parse default text, using fallback")
+    defaultText = "Hello World";
+}
 
 // Check initial authentication and subscription
 async function bootstrap() {

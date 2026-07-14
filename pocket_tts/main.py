@@ -20,7 +20,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -40,6 +40,7 @@ from pocket_tts.default_parameters import (
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
+from stripe_subscription.config import settings
 from stripe_subscription.database import Base, engine, get_db
 from stripe_subscription.dependencies import get_active_subscription, get_current_user
 from stripe_subscription.logging import logger
@@ -96,9 +97,38 @@ def startup():
     Base.metadata.create_all(bind=engine)
     db = next(get_db())
     try:
-        if db.query(Plan).count() == 0:  # type: ignore
+        if db.query(Plan).count() == 0:
             plans = [
-                # ... plan definitions unchanged ...
+                Plan(
+                    name="Basic",
+                    tier="basic",
+                    monthly_price=500,
+                    yearly_price=4800,
+                    quota_limit=50000,
+                    stripe_price_monthly=settings.STRIPE_PRICE_BASIC_MONTHLY_ID,
+                    stripe_price_yearly=settings.STRIPE_PRICE_BASIC_YEARLY_ID,
+                    is_active=True,
+                ),
+                Plan(
+                    name="Pro",
+                    tier="pro",
+                    monthly_price=1500,
+                    yearly_price=14400,
+                    quota_limit=250000,
+                    stripe_price_monthly=settings.STRIPE_PRICE_PRO_MONTHLY_ID,
+                    stripe_price_yearly=settings.STRIPE_PRICE_PRO_YEARLY_ID,
+                    is_active=True,
+                ),
+                Plan(
+                    name="Enterprise",
+                    tier="enterprise",
+                    monthly_price=5000,
+                    yearly_price=48000,
+                    quota_limit=1500000,
+                    stripe_price_monthly=settings.STRIPE_PRICE_ENTERPRISE_MONTHLY_ID,
+                    stripe_price_yearly=settings.STRIPE_PRICE_ENTERPRISE_YEARLY_ID,
+                    is_active=True,
+                ),
             ]
             db.add_all(plans)
             db.commit()
@@ -107,6 +137,13 @@ def startup():
         logger.error(f"Error seeding plans: {str(e)}", exc_info=True)
     finally:
         db.close()
+
+
+@web_app.exception_handler(ConnectionResetError)
+async def connection_reset_handler(request: Request, exc: ConnectionResetError):
+    return JSONResponse(
+        status_code=499, content={"detail": "Client disconnected", "error": f"{exc}"}
+    )
 
 
 # ----- Endpoints -----

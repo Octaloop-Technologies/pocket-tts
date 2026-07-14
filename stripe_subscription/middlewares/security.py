@@ -29,5 +29,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         if isinstance(response, Response):
             self.secure_headers.set_headers(response)
+            # Production-ready CSP – no 'unsafe-inline' for scripts
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "media-src 'self' blob:; "
+                "connect-src 'self'; "
+                "img-src 'self' data:; "
+                "font-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'none'; "
+                "upgrade-insecure-requests;"
+            )
 
         return response
