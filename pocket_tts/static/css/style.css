@@ -1,0 +1,218 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.container {
+    max-width: 500px;
+    width: 100%;
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+}
+
+.view {
+    display: none;
+}
+
+.view.active {
+    display: block;
+}
+
+h1 {
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.form-group {
+    margin-bottom: 1rem;
+}
+
+label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+}
+
+input {
+    width: 100%;
+    padding: 0.6rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+}
+
+.btn {
+    background: #635bff;
+    color: white;
+    border: none;
+    padding: 0.7rem;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+.btn:hover {
+    background: #4f47d6;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid #635bff;
+    color: #635bff;
+}
+
+.btn-outline:hover {
+    background: #f5f3ff;
+}
+
+.error {
+    color: #b91c1c;
+    background: #fee2e2;
+    padding: 0.5rem;
+    border-radius: 6px;
+    margin-top: 0.5rem;
+    display: none;
+}
+
+.success-msg {
+    color: #1e3a8a;
+    background: #dbeafe;
+    padding: 0.5rem;
+    border-radius: 6px;
+    margin-top: 0.5rem;
+    display: none;
+}
+
+.link-row {
+    text-align: center;
+    margin-top: 1.2rem;
+}
+
+.link-row a {
+    color: #635bff;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.link-row a:hover {
+    text-decoration: underline;
+}
+
+.link-row span {
+    margin: 0 0.3rem;
+    color: #ccc;
+}
+
+.badge {
+    background: #e5e7eb;
+    padding: 0.2rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+}
+
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #e5e7eb;
+    margin-bottom: 1.5rem;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+#audio-section {
+    margin-top: 1.5rem;
+}
+
+#audio-section audio {
+    width: 100%;
+}
+
+#plan-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.plan-card {
+    border: 2px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.plan-card.selected {
+    border-color: #635bff;
+    background: #f5f3ff;
+}
+
+.plan-card .price {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.plan-toggle {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+#tts-ui textarea {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    resize: vertical;
+}
+
+.flex-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.flex-row input,
+.flex-row input[type="file"] {
+    flex: 1;
+}
+
+.next-btn {
+    width: 100%;
+}
+
+.gear {
+    font-size: 1.5rem;
+    cursor: pointer;
+}
+
+@media (max-width: 640px) {
+    .plan-cards {
+        grid-template-columns: 1fr;
+    }
+}

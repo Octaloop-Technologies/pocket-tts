@@ -4,12 +4,13 @@ import os
 import sys
 import tempfile
 import threading
+import traceback
 from pathlib import Path
 from queue import Queue
 
 import typer
 import uvicorn
-from fastapi import (  # ← added Request
+from fastapi import (
     Depends,
     FastAPI,
     File,
@@ -20,6 +21,8 @@ from fastapi import (  # ← added Request
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from typing_extensions import Annotated
 
@@ -41,6 +44,7 @@ from stripe_subscription.database import Base, engine, get_db
 from stripe_subscription.dependencies import get_active_subscription, get_current_user
 from stripe_subscription.logging import logger
 from stripe_subscription.middlewares.check_if_subscribed import SubscriptionMiddleware
+from stripe_subscription.middlewares.security import SecurityHeadersMiddleware
 from stripe_subscription.models import Plan, Subscription, User
 from stripe_subscription.routes import router as stripe_router
 
@@ -57,10 +61,17 @@ web_app = FastAPI(
     description="Text-to-Speech generation API",
     version="1.0.0",
 )
+
+BASE_DIR = Path(__file__).parent
+web_app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "static" / "templates"))
+
 web_app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
         "https://pod1-10007.internal.kyutai.org",
         "https://kyutai.org",
     ],
@@ -71,6 +82,9 @@ web_app.add_middleware(
 
 # Check Subscription Middleware
 web_app.add_middleware(SubscriptionMiddleware)
+
+# Security Middleware
+web_app.add_middleware(SecurityHeadersMiddleware)
 
 # ----- Mount Stripe router -----
 web_app.include_router(stripe_router)
@@ -96,18 +110,31 @@ def startup():
 
 
 # ----- Endpoints -----
-@web_app.get("/", response_class=HTMLResponse)
-async def root():
-    if tts_model is None:
-        return HTMLResponse(
-            "<h1>Model not loaded. Please start the server with `pocket-tts serve`.</h1>"
+@web_app.get("/")
+async def root(request: Request):
+    try:
+        if tts_model is None:
+            return templates.TemplateResponse(
+                request,
+                "index.jinja2",
+                {
+                    "default_text": "Model not loaded.",
+                    "tts_loaded": False,
+                },
+            )
+        default_text = get_default_text_for_language(str(tts_model.origin))
+        return templates.TemplateResponse(
+            request,
+            "index.jinja2",
+            {"default_text": default_text, "tts_loaded": True},
         )
-    static_path = Path(__file__).parent / "static" / "index.html"
-    content = static_path.read_text(encoding="utf-8")
-    content = content.replace(
-        "DEFAULT_TEXT_PROMPT", get_default_text_for_language(str(tts_model.origin))
-    )
-    return content
+    except Exception:
+        # Print full stack trace to server logs
+        logging.error("Template rendering failed:\n" + traceback.format_exc())
+        # Return a simple error page with the exception message
+        return HTMLResponse(
+            f"<h1>Template error</h1><pre>{traceback.format_exc()}</pre>"
+        )
 
 
 @web_app.get("/health")

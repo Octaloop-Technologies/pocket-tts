@@ -1,0 +1,21 @@
+<div id="view-login" class="view active">
+    <h1>🎙️ Pocket TTS</h1>
+    <p style="text-align:center;">Log in to your account</p>
+    <form id="form-login">
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="login-email" autocomplete="email" required />
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="login-password" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="btn">Login</button>
+        <div id="login-error" class="error"></div>
+    </form>
+    <div class="link-row">
+        <a data-view="register">Create an account</a>
+        <span>•</span>
+        <a data-view="forgot">Forgot password?</a>
+    </div>
+</div>

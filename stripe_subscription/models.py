@@ -30,6 +30,11 @@ class User(Base):
     )
     last_login = Column(DateTime, nullable=True)
 
+    # Password reset fields
+    reset_token_hash = Column(String, nullable=True)
+    reset_token_expiry = Column(DateTime, nullable=True)
+    reset_token_used = Column(Boolean, default=False)
+
     subscriptions = relationship("Subscription", back_populates="user")
     audit_logs = relationship("AuditLog", back_populates="user")
 

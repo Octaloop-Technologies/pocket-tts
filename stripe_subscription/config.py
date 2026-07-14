@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     )
     BCRYPT_ROUNDS: int = Field(default=12, description="bcrypt work factor")
 
+    # Email (for password reset)
+    SMTP_HOST: str = Field(default="")
+    SMTP_PORT: int = Field(default=587)
+    SMTP_USER: str = Field(default="")
+    SMTP_PASSWORD: SecretStr = Field(default="")  # type: ignore
+    EMAIL_FROM: str = Field(default="noreply@example.com")
+    FRONTEND_URL: str = Field(default="http://localhost:8000")
+
     @field_validator("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", mode="before")
     @classmethod
     def validate_secrets_not_empty(cls, v: str | SecretStr) -> SecretStr | str:

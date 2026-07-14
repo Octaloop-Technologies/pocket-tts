@@ -5,7 +5,7 @@ Supports in-memory (single instance) and Redis (distributed) backends.
 
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Protocol
+from typing import Optional, Protocol
 
 
 class RateLimitBackend(Protocol):
@@ -20,7 +20,7 @@ class InMemoryRateLimiter:
     """In-memory rate limiter using sliding window with token bucket."""
 
     def __init__(self):
-        self._requests: Dict[str, List[float]] = defaultdict(list)
+        self._requests: dict[str, list[float]] = defaultdict(list)
 
     def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
         """Check if request is allowed within the rate limit."""
@@ -67,7 +67,7 @@ class RedisRateLimiter:
 
 
 # Singleton instance (in-memory by default, can be replaced with Redis)
-_rate_limiter: Optional[RateLimitBackend] = None
+_rate_limiter: Optional[RateLimitBackend]
 
 
 def get_rate_limiter() -> RateLimitBackend:

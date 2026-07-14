@@ -1,6 +1,7 @@
 """
 Security middleware for SOC2 compliance.
 Adds OWASP-recommended security headers to all responses.
+Skips documentation endpoints to allow Swagger UI to render.
 """
 
 from fastapi import Request
@@ -11,8 +12,8 @@ from starlette.responses import Response
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """
-    Adds security headers to all responses.
-    Uses the 'secure' library with balanced defaults.[reference:9]
+    Adds security headers to all responses except /docs, /openapi.json, /redoc.
+    Uses the 'secure' library with balanced defaults.
     """
 
     def __init__(self, app):
@@ -22,13 +23,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
 
-        # Apply security headers
+        # Skip security headers for documentation routes
+        if request.url.path in ("/docs", "/openapi.json", "/redoc"):
+            return response
+
         if isinstance(response, Response):
             self.secure_headers.set_headers(response)
 
         return response
-
-
-# Alternative: Direct integration with SecureASGIMiddleware
-# from secure.middleware import SecureASGIMiddleware
-# app.add_middleware(SecureASGIMiddleware, secure=Secure.with_default_headers())

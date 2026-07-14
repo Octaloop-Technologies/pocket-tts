@@ -1,0 +1,17 @@
+{% extends "base.jinja2" %}
+
+{% block content %}
+    {% include "partials/login.jinja2" %}
+    {% include "partials/register.jinja2" %}
+    {% include "partials/forgot.jinja2" %}
+    {% include "partials/reset.jinja2" %}
+    {% include "partials/plan.jinja2" %}
+    {% include "partials/app.jinja2" %}
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+    import { setDefaultText } from "{{ url_for('static', path='/js/tts.js') }}";
+    setDefaultText({{ default_text|tojson }});
+</script>
+{% endblock %}

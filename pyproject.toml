@@ -26,6 +26,7 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "secure>=2.0.1",
     "structlog>=26.1.0",
+    "bcrypt",
 ]
 
 [project.optional-dependencies]

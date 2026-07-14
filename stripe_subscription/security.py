@@ -7,13 +7,14 @@ import hashlib
 import logging
 import os
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
 from fastapi import Request
 from sqlalchemy.orm import Session
 
-from .models import AuditLog
+from .models import AuditLog, User
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ def log_audit(
     logger.info(f"AUDIT: user={user_id}, action={action}, ip={ip}")
 
 
-def safe_get(obj, key, default=None):
+def safe_get(obj, key, default=None) -> None:
     """Safely get a value from a Stripe object."""
     try:
         if hasattr(obj, "__getitem__"):
@@ -102,3 +103,38 @@ def safe_get(obj, key, default=None):
         return getattr(obj, key, default)
     except (KeyError, AttributeError, TypeError):
         return default
+
+
+def generate_reset_token() -> str:
+    """Generate a cryptographically secure random token."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """SHA256 hash the token for storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_reset_token(user: "User", db: Session) -> str:
+    """
+    Generate a reset token, store its hash and expiry in the user record.
+    Returns the plain token (to be sent via email).
+    """
+    token = generate_reset_token()
+    token_hash = hash_token(token)
+    user.reset_token_hash = token_hash  # type: ignore
+    user.reset_token_expiry = datetime.now(timezone.utc) + timedelta(minutes=30)  # type: ignore
+    user.reset_token_used = False  # type: ignore
+    db.commit()
+    return token
+
+
+def verify_reset_token(token: str, user: "User") -> bool:
+    """Check if token is valid (matches hash, not expired, not used)."""
+    if not user.reset_token_hash:  # type: ignore
+        return False
+    if user.reset_token_used:  # type: ignore
+        return False
+    if user.reset_token_expiry < datetime.now(timezone.utc):  # type: ignore
+        return False
+    return secrets.compare_digest(hash_token(token), user.reset_token_hash)  # type: ignore

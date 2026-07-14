@@ -1,0 +1,19 @@
+<div id="view-reset" class="view">
+    <h1>Set New Password</h1>
+    <form id="form-reset">
+        <div class="form-group">
+            <label>New Password (min 8 chars)</label>
+            <input type="password" id="reset-password" autocomplete="new-password" required />
+        </div>
+        <div class="form-group">
+            <label>Confirm New Password</label>
+            <input type="password" id="reset-confirm" autocomplete="new-password" required />
+        </div>
+        <button type="submit" class="btn">Reset Password</button>
+        <div id="reset-error" class="error"></div>
+        <div id="reset-success" class="success-msg"></div>
+    </form>
+    <div class="link-row">
+        <a data-view="login">Back to login</a>
+    </div>
+</div>

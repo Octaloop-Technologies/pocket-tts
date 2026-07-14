@@ -1,0 +1,28 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"extensions": {
+		"recommendations": [
+			"EditorConfig.EditorConfig",
+			"ms-python.black-formatter",
+			"ms-python.debugpy",
+			"ms-python.python",
+			"ms-python.vscode-pylance",
+			"ms-python.vscode-python-envs",
+			"dotenv.dotenv-vscode",
+			"samuelcolvin.jinjahtml",
+			"charliermarsh.ruff",
+			"dbaeumer.vscode-eslint",
+			"ms-vscode.js-debug-companion",
+			"ms-vscode.js-debug",
+			"ms-vscode.vscode-typescript-next",
+			"ms-vscode.vscode-js-profile-table",
+			"formulahendry.auto-close-tag",
+			"formulahendry.auto-rename-tag",
+			"formulahendry.auto-complete-tag",
+		]
+	}
+}
