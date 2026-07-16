@@ -4,6 +4,7 @@ Intercepts POST /tts to verify active subscription before processing.
 """
 
 from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
@@ -19,7 +20,9 @@ from stripe_subscription.models import Subscription, User
 class SubscriptionMiddleware(BaseHTTPMiddleware):
     """Middleware that checks for active subscription on POST /tts."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Any]]
+    ) -> Any:
         # Only intercept POST /tts
         if request.method == "POST" and request.url.path == "/tts":
             api_key = request.headers.get(settings.API_KEY_HEADER)
@@ -54,9 +57,9 @@ class SubscriptionMiddleware(BaseHTTPMiddleware):
                         },
                     )
 
-                end_date = ensure_utc_aware(sub.end_date)  # type: ignore
+                end_date = ensure_utc_aware(sub.end_date)
                 if end_date is not None and end_date < datetime.now(timezone.utc):
-                    sub.status = "expired"  # type: ignore
+                    sub.status = "expired"
                     db.commit()
                     return JSONResponse(
                         status_code=status.HTTP_403_FORBIDDEN,

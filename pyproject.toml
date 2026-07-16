@@ -26,9 +26,9 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "secure>=2.0.1",
     "structlog>=26.1.0",
-    "bcrypt",
-    "python-jose[cryptography]",
-    "passlib[bcrypt]",
+    "bcrypt>=5.0.0",
+    "python-jose[cryptography]>=3.5.0",
+    "passlib[bcrypt]>=1.7.4",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +47,7 @@ dev = [
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
     "soundfile",
+    "types-python-jose>=3.5.0.20260408",
 ]
 
 
@@ -68,6 +69,14 @@ line-ending = "lf"
 # avoid having a trailing comma changing
 # the behavior of the formatter
 skip-magic-trailing-comma = true
+
+[tool.mypy]
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+exclude = ["**/node_modules", "**/__pycache__/**", "**/site-packages/**", "**/.venv/**", "**/.venv/**", "pyproject.toml", "**/.*"]
+
 
 [build-system]
 requires = ["hatchling"]

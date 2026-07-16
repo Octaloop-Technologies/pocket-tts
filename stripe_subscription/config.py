@@ -1,3 +1,4 @@
+# stripe_subscription/config.py
 """
 Configuration management using Pydantic Settings.
 All settings are validated at startup - the app fails fast if config is wrong.
@@ -17,10 +18,14 @@ class Settings(BaseSettings):
         extra="allow",
     )
 
+    # JWT (for password reset)
+    JWT_SECRET_KEY: str = Field(default="", description="Secret key for JWT tokens")
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT signing algorithm")
+
     # Stripe API
-    STRIPE_SECRET_KEY: SecretStr = Field(default="")  # type: ignore
+    STRIPE_SECRET_KEY: SecretStr = Field(default=SecretStr(""))
     STRIPE_PUBLISHABLE_KEY: str = Field(default="")
-    STRIPE_WEBHOOK_SECRET: SecretStr = Field(default="")  # type: ignore
+    STRIPE_WEBHOOK_SECRET: SecretStr = Field(default=SecretStr(""))
     STRIPE_API_VERSION: str = Field(default="2025-02-24.acacia")
 
     # Payment Links
@@ -72,14 +77,13 @@ class Settings(BaseSettings):
     SMTP_HOST: str = Field(default="")
     SMTP_PORT: int = Field(default=587)
     SMTP_USER: str = Field(default="")
-    SMTP_PASSWORD: SecretStr = Field(default="")  # type: ignore
+    SMTP_PASSWORD: SecretStr = Field(default=SecretStr(""))
     EMAIL_FROM: str = Field(default="noreply@example.com")
     FRONTEND_URL: str = Field(default="http://localhost:8000")
 
     @field_validator("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", mode="before")
     @classmethod
     def validate_secrets_not_empty(cls, v: str | SecretStr) -> SecretStr | str:
-        """Ensure required secrets are not empty strings."""
         if isinstance(v, str) and not v.strip():
             return v
         if isinstance(v, SecretStr) and not v.get_secret_value().strip():
@@ -87,11 +91,9 @@ class Settings(BaseSettings):
         return v
 
     def get_stripe_secret_key(self) -> str:
-        """Safely get the Stripe secret key value."""
         return self.STRIPE_SECRET_KEY.get_secret_value()
 
     def get_stripe_webhook_secret(self) -> str:
-        """Safely get the Stripe webhook secret value."""
         return self.STRIPE_WEBHOOK_SECRET.get_secret_value()
 
 

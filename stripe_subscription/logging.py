@@ -6,19 +6,14 @@ Uses structlog for JSON-formatted, machine-readable logs.
 import logging
 import sys
 from contextvars import ContextVar
+from typing import Optional
 
 import structlog
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 
-def setup_logging(json_logs: bool | None = None) -> None:
-    """
-    Configure structured logging with structlog.
-
-    Args:
-        json_logs: Force JSON output. If None, auto-detect based on TTY.
-    """
+def setup_logging(json_logs: Optional[bool] = None) -> None:
     if json_logs is None:
         json_logs = not sys.stdout.isatty()
 
@@ -40,8 +35,7 @@ def setup_logging(json_logs: bool | None = None) -> None:
         cache_logger_on_first_use=True,
     )
 
-    # Configure standard logging
-    handlers = []
+    handlers: list[logging.Handler] = []
     if json_logs:
         formatter = structlog.stdlib.ProcessorFormatter(
             processor=structlog.processors.JSONRenderer()
@@ -55,29 +49,23 @@ def setup_logging(json_logs: bool | None = None) -> None:
     handler.setFormatter(formatter)
     handlers.append(handler)
 
-    # Apply to root logger
     root_logger = logging.getLogger()
     root_logger.handlers = handlers
     root_logger.setLevel(logging.INFO)
 
-    # Silence noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 def get_logger(name: str = "pocket_tts"):
-    """Get a structured logger instance."""
     return structlog.get_logger(name)
 
 
-# Auto-setup on import
 setup_logging()
 logger = get_logger()
 
 
 class RequestIdFilter(logging.Filter):
-    """Filter that adds request_id to log records."""
-
-    def filter(self, record):
+    def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get() or "no-id"
         return True

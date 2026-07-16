@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import stripe
@@ -19,21 +22,19 @@ router = APIRouter()
 async def get_subscription(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-):
-    """Get the user's current subscription status."""
-    user_id = int(user.id)  # type: ignore
+) -> dict[str, Any]:
+    user_id = user.id
     local_sub = db.query(Subscription).filter_by(user_id=user_id).first()
 
-    if local_sub and local_sub.status == "active":  # type: ignore
+    if local_sub and local_sub.status == "active":
         return format_subscription_response(local_sub)
 
-    # Try to find via Stripe by email
-    stripe_customer_id = getattr(user, "stripe_customer_id", None)
+    stripe_customer_id = user.stripe_customer_id
     if not stripe_customer_id:
-        customers = stripe.Customer.list(email=user.email, limit=1)  # type: ignore
+        customers = stripe.Customer.list(email=user.email, limit=1)
         if customers.data:
             customer = customers.data[0]
-            user.stripe_customer_id = customer.id  # type: ignore
+            user.stripe_customer_id = customer.id
             stripe_customer_id = customer.id
             db.commit()
             logging.getLogger(__name__).info(
@@ -55,8 +56,7 @@ async def get_subscription(
 
 
 @router.get("/plans")
-async def get_plans(db: Session = Depends(get_db)):
-    """Get all available plans."""
+async def get_plans(db: Session = Depends(get_db)) -> dict[str, list[dict[str, Any]]]:
     plans = db.query(Plan).filter_by(is_active=True).all()
     return {
         "plans": [
@@ -77,8 +77,7 @@ async def get_payment_link(
     plan: str,
     interval: str,
     user: User = Depends(get_current_user),
-):
-    """Generate a personalized Stripe payment link."""
+) -> dict[str, bytes]:
     key = f"STRIPE_PRICE_{plan.upper()}_{interval.upper()}_LINK"
     payment_link = getattr(settings, key, None)
 
@@ -97,7 +96,8 @@ async def get_payment_link(
     if getattr(settings, "STRIPE_PAYMENT_SUCCESS_URL", None):
         query["redirect_url"] = [settings.STRIPE_PAYMENT_SUCCESS_URL]
 
-    payment_link = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+    new_query = urlencode(query, doseq=True)
+    payment_link = urlunparse(parsed._replace(query=new_query))
 
     logging.getLogger(__name__).info(
         "Generated payment link for user %s (%s %s)",

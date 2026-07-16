@@ -9,6 +9,7 @@
             <label>Confirm New Password</label>
             <input type="password" id="reset-confirm" autocomplete="new-password" required />
         </div>
+        <input type="hidden" id="reset-csrf" name="csrf_token" value="" />
         <button type="submit" class="btn">Reset Password</button>
         <div id="reset-error" class="error"></div>
         <div id="reset-success" class="success-msg"></div>

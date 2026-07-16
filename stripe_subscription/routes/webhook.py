@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,11 +15,9 @@ from stripe_subscription.stripe_utils import sync_subscription_from_stripe
 
 router = APIRouter()
 
-# ----- Webhook Handlers -----
-
 
 def handle_checkout_completed(
-    data,
+    data: dict[str, Any],
     db: Session,
     request: Request,
 ) -> None:
@@ -47,7 +48,7 @@ def handle_checkout_completed(
         sync_subscription_from_stripe(
             stripe_subscription_id,
             db,
-            user_id=user.id,  # type: ignore
+            user_id=user.id,
         )
         db.commit()
     except Exception:
@@ -61,7 +62,7 @@ def handle_checkout_completed(
     try:
         log_audit(
             db=db,
-            user_id=user.id,  # type: ignore
+            user_id=user.id,
             action="payment_success",
             details={
                 "subscription": stripe_subscription_id,
@@ -79,7 +80,7 @@ def handle_checkout_completed(
 
 
 def handle_subscription_updated(
-    data,
+    data: dict[str, Any],
     db: Session,
     request: Request,
 ) -> None:
@@ -103,7 +104,7 @@ def handle_subscription_updated(
 
 
 def handle_subscription_deleted(
-    data,
+    data: dict[str, Any],
     db: Session,
     request: Request,
 ) -> None:
@@ -137,18 +138,17 @@ WEBHOOK_HANDLERS = {
 async def stripe_webhook(
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> dict[str, str]:
     payload = await request.body()
     signature = request.headers.get("stripe-signature")
 
-    # ── Fix: use raw webhook secret ──
     webhook_secret = settings.get_stripe_webhook_secret()
 
     try:
         event = stripe.Webhook.construct_event(
             payload=payload,
             sig_header=signature,
-            secret=webhook_secret,  # ← now a string
+            secret=webhook_secret,
         )
     except ValueError:
         logging.getLogger(__name__).exception("Invalid Stripe webhook payload.")

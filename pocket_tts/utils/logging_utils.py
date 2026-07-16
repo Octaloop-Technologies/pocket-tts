@@ -3,16 +3,20 @@ from contextlib import contextmanager
 
 
 class PackageFilter(logging.Filter):
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self.name = name
         super().__init__()
 
-    def filter(self, record):
+    def filter(self, record: logging.LogRecord) -> bool:
         return record.name.startswith(self.name)
 
 
 @contextmanager
-def enable_logging(library_name, level, filter_by_name=True):
+def enable_logging(
+    library_name: str,
+    level: int,
+    filter_by_name: bool = True,
+):
     """
     Enable logging for the given library.
     If filter_by_name is True (default), only logs from modules starting with

@@ -1,7 +1,6 @@
 import { apiFetch, showError, hideError, showSuccess, hideSuccess, switchView, setApiKey } from './utils.js';
 
 export function initAuth() {
-    // Login
     document.getElementById('form-login').addEventListener('submit', async (e) => {
         e.preventDefault();
         hideError(document.getElementById('login-error'));
@@ -19,7 +18,6 @@ export function initAuth() {
         }
     });
 
-    // Register
     document.getElementById('form-register').addEventListener('submit', async (e) => {
         e.preventDefault();
         hideError(document.getElementById('reg-error'));
@@ -43,7 +41,6 @@ export function initAuth() {
         }
     });
 
-    // Forgot password
     document.getElementById('form-forgot').addEventListener('submit', async (e) => {
         e.preventDefault();
         hideError(document.getElementById('forgot-error'));
@@ -61,7 +58,6 @@ export function initAuth() {
         }
     });
 
-    // Reset password
     document.getElementById('form-reset').addEventListener('submit', async (e) => {
         e.preventDefault();
         hideError(document.getElementById('reset-error'));
@@ -69,6 +65,7 @@ export function initAuth() {
         const token = document.getElementById('form-reset').dataset.token;
         const newPass = document.getElementById('reset-password').value;
         const confirmPass = document.getElementById('reset-confirm').value;
+        const csrfToken = document.getElementById('reset-csrf').value;
         if (newPass !== confirmPass) {
             showError(document.getElementById('reset-error'), 'Passwords do not match');
             return;
@@ -80,30 +77,23 @@ export function initAuth() {
         try {
             const data = await apiFetch('/stripe/reset-password', {
                 method: 'POST',
-                body: JSON.stringify({ token, new_password: newPass, confirm_password: confirmPass })
+                body: JSON.stringify({
+                    token,
+                    new_password: newPass,
+                    confirm_password: confirmPass,
+                    csrf_token: csrfToken
+                })
             });
             showSuccess(document.getElementById('reset-success'), data.message);
             document.getElementById('form-reset').reset();
             delete document.getElementById('form-reset').dataset.token;
+            document.getElementById('reset-csrf').value = '';
             setTimeout(() => switchView('login'), 3000);
         } catch (err) {
             showError(document.getElementById('reset-error'), err.message);
         }
     });
 
-    // Handle token in URL for reset
-    // (function initReset() {
-    //     const params = new URLSearchParams(window.location.search);
-    //     const token = params.get('token');
-    //     if (token) {
-    //         switchView('reset');
-    //         document.getElementById('form-reset').dataset.token = token;
-    //         const newUrl = window.location.origin + window.location.pathname;
-    //         window.history.replaceState({}, document.title, newUrl);
-    //     }
-    // })();
-
-    // View switching via data-view links (delegated)
     document.addEventListener('click', (e) => {
         const link = e.target.closest('[data-view]');
         if (!link) return;
@@ -113,16 +103,10 @@ export function initAuth() {
     });
 }
 
-// After successful auth: check subscription
 async function afterAuth() {
     try {
         const sub = await apiFetch('/stripe/subscription');
         if (sub.status === 'active') {
-            // app view will be shown by the app module
-            switchView('app');
-            // We need to update the app UI; the app module will handle that when its init is called.
-            // We can dispatch an event or call a function.
-            // We'll import and call a function from tts.js
             const { showApp } = await import('./tts.js');
             showApp(sub);
         } else {
@@ -134,5 +118,32 @@ async function afterAuth() {
         switchView('plan');
         const { initPlan } = await import('./plan.js');
         initPlan();
+    }
+}
+
+export async function handleResetToken(token) {
+    try {
+        const response = await fetch(`${window.location.origin}/stripe/reset-password?token=${encodeURIComponent(token)}`, {
+            method: 'GET',
+            credentials: 'include'
+        });
+        if (!response.ok) {
+            throw new Error('Invalid or expired token');
+        }
+        const data = await response.json();
+        const form = document.getElementById('form-reset');
+        form.dataset.token = data.token;
+        document.getElementById('reset-csrf').value = data.csrf_token;
+        switchView('reset');
+    } catch (err) {
+        console.error('Token validation failed:', err.message);
+        switchView('login');
+        const errorEl = document.getElementById('login-error');
+        if (errorEl) {
+            errorEl.textContent = 'Password reset link is invalid or expired. Please request a new one.';
+            errorEl.style.display = 'block';
+        }
+        const cleanUrl = window.location.origin + window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
     }
 }

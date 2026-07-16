@@ -1,7 +1,4 @@
-"""
-Stripe subscription synchronization utilities.
-Handles fetching subscription data from Stripe and syncing to local DB.
-"""
+from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
@@ -20,7 +17,6 @@ stripe.api_key = settings.get_stripe_secret_key()
 
 
 def get_plan_by_price_id(price_id: str, db: Session) -> Optional[Plan]:
-    """Find a plan by its Stripe Price ID (matches either monthly or yearly)."""
     return (
         db.query(Plan)
         .filter(
@@ -48,7 +44,6 @@ def sync_subscription_from_stripe(
         )
         raise
 
-    # Resolve user if not provided
     if user_id is None:
         customer_id = getattr(stripe_sub, "customer", None)
         if not customer_id:
@@ -68,7 +63,6 @@ def sync_subscription_from_stripe(
         user_id = user.id
         logger.info(f"Resolved user_id={user_id} from customer {customer.id}")
 
-    # Extract price ID
     items = getattr(stripe_sub, "items", None)
     if not items or not hasattr(items, "data") or not items.data:
         logger.error(f"No items found in subscription {subscription_id}")
@@ -84,18 +78,15 @@ def sync_subscription_from_stripe(
         raise ValueError("Missing price ID")
     logger.info(f"Price ID: {price_id}")
 
-    # Find local plan
     plan = get_plan_by_price_id(price_id, db)
     if not plan:
         logger.error(f"No local plan found for price ID {price_id}")
         raise ValueError(f"Plan not found for price {price_id}")
 
-    # Determine interval
     recurring = getattr(price, "recurring", {})
     interval = getattr(recurring, "interval", "monthly")
     logger.info(f"Interval: {interval}")
 
-    # Safely get period timestamps
     current_period_start = getattr(stripe_sub, "current_period_start", None)
     current_period_end = getattr(stripe_sub, "current_period_end", None)
 
@@ -110,10 +101,8 @@ def sync_subscription_from_stripe(
         else None
     )
 
-    # Get status safely
     status = getattr(stripe_sub, "status", "inactive")
 
-    # Look for existing local subscription
     local_sub = (
         db.query(Subscription).filter_by(stripe_subscription_id=subscription_id).first()
     )
@@ -132,12 +121,12 @@ def sync_subscription_from_stripe(
         local_sub = Subscription(
             user_id=user_id,
             plan_id=plan.id,
+            quota_limit=plan.quota_limit,
+            interval=interval,
             stripe_subscription_id=subscription_id,
             status=status,
             start_date=start_date,
             end_date=end_date,
-            quota_limit=plan.quota_limit,
-            interval=interval,
             characters_used=0,
         )
         db.add(local_sub)

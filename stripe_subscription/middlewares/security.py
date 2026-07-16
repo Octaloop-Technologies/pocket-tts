@@ -1,14 +1,11 @@
-"""
-Security utilities: password hashing, API key generation, audit logging.
-Uses bcrypt for password hashing (SOC2 compliant).
-"""
+from __future__ import annotations
 
 import hashlib
 import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import bcrypt
 import starlette.requests
@@ -22,11 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """
-    Adds security headers to every response.
-    """
-
-    async def dispatch(self, request: starlette.requests.Request, call_next):
+    async def dispatch(
+        self,
+        request: starlette.requests.Request,
+        call_next: Callable[[Request], Awaitable[Any]],
+    ) -> Any:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -35,26 +32,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def ensure_utc_aware(dt: Optional[datetime]) -> Optional[datetime]:
-    """Ensure a datetime is UTC-aware; if naive, attach UTC timezone."""
-    if dt is None:
-        return None
+def ensure_utc_aware(dt: Optional[datetime]) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
 def hash_password(password: str, rounds: int = 12) -> str:
-    """
-    Hash a password using bcrypt.
-
-    Args:
-        password: Plain text password
-        rounds: bcrypt work factor (default: 12)
-
-    Returns:
-        bcrypt hash as string
-    """
     try:
         salt = bcrypt.gensalt(rounds=rounds)
         return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
@@ -64,19 +48,13 @@ def hash_password(password: str, rounds: int = 12) -> str:
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    """
-    Verify a password against a hash.
-    Supports bcrypt and SHA256 fallback for backward compatibility.
-    """
     try:
         return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
     except (ValueError, TypeError):
-        # Fallback for old SHA256 hashes
         return hash_password(password) == hashed
 
 
 def _sha256_hash(password: str) -> str:
-    """Legacy SHA256 hashing (fallback only)."""
     salt = os.getenv("PASSWORD_SALT", "pocket-tts-salt-2026").encode()
     hash_obj = hashlib.sha256()
     hash_obj.update(salt)
@@ -85,7 +63,6 @@ def _sha256_hash(password: str) -> str:
 
 
 def generate_api_key() -> str:
-    """Generate a secure API key using secrets.token_urlsafe."""
     return f"sk_{secrets.token_urlsafe(32)}"
 
 
@@ -93,14 +70,9 @@ def log_audit(
     db: Session,
     user_id: Optional[int],
     action: str,
-    details: Optional[dict] = None,
+    details: Optional[dict[str, Any]] = None,
     request: Optional[Request] = None,
 ) -> None:
-    """
-    Log an audit trail entry for SOC2 compliance.
-
-    Records: user_id, action, timestamp, IP, user-agent, details.
-    """
     ip = None
     ua = None
     if request:
@@ -120,8 +92,7 @@ def log_audit(
     logger.info(f"AUDIT: user={user_id}, action={action}, ip={ip}")
 
 
-def safe_get(obj, key, default=None) -> None:
-    """Safely get a value from a Stripe object."""
+def safe_get(obj: Any, key: str, default: Any = None) -> Any:
     try:
         if hasattr(obj, "__getitem__"):
             return obj.get(key, default)
@@ -131,37 +102,29 @@ def safe_get(obj, key, default=None) -> None:
 
 
 def generate_reset_token() -> str:
-    """Generate a cryptographically secure random token."""
     return secrets.token_urlsafe(32)
 
 
 def hash_token(token: str) -> str:
-    """SHA256 hash the token for storage."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_reset_token(user: "User", db: Session) -> str:
-    """
-    Generate a reset token, store its hash and expiry in the user record.
-    Returns the plain token (to be sent via email).
-    """
+def create_reset_token(user: User, db: Session) -> str:
     token = generate_reset_token()
     token_hash = hash_token(token)
-    user.reset_token_hash = token_hash  # type: ignore
-    user.reset_token_expiry = datetime.now(timezone.utc) + timedelta(minutes=30)  # type: ignore
-    user.reset_token_used = False  # type: ignore
+    user.reset_token_hash = token_hash
+    user.reset_token_expiry = datetime.now(timezone.utc) + timedelta(minutes=30)
+    user.reset_token_used = False
     db.commit()
     return token
 
 
-def verify_reset_token(token: str, user: "User") -> bool:
-    """Check if token is valid (matches hash, not expired, not used)."""
-    if not user.reset_token_hash:  # type: ignore
+def verify_reset_token(token: str, user: User) -> bool:
+    if not user.reset_token_hash:
         return False
-    if user.reset_token_used:  # type: ignore
+    if user.reset_token_used:
         return False
-    # Ensure expiry is UTC-aware for comparison
-    expiry = ensure_utc_aware(user.reset_token_expiry)  # type: ignore
+    expiry = ensure_utc_aware(user.reset_token_expiry)
     if expiry is None or expiry < datetime.now(timezone.utc):
         return False
-    return secrets.compare_digest(hash_token(token), user.reset_token_hash)  # type: ignore
+    return secrets.compare_digest(hash_token(token), user.reset_token_hash)

@@ -1,33 +1,24 @@
-"""
-Rate limiter for API protection (SOC2 Availability).
-Supports in-memory (single instance) and Redis (distributed) backends.
-"""
+from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import Optional, Protocol
+from functools import wraps
+from typing import Any, Callable, Optional, Protocol
+
+from fastapi import HTTPException, Request
 
 
 class RateLimitBackend(Protocol):
-    """Protocol for rate limit backends."""
-
-    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
-        """Return True if request is allowed, False if rate limited."""
-        ...
+    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool: ...
 
 
 class InMemoryRateLimiter:
-    """In-memory rate limiter using sliding window with token bucket."""
-
     def __init__(self):
         self._requests: dict[str, list[float]] = defaultdict(list)
 
     def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
-        """Check if request is allowed within the rate limit."""
         now = time.time()
         timestamps = self._requests[key]
-
-        # Remove timestamps outside the window
         timestamps = [t for t in timestamps if now - t < window_seconds]
 
         if len(timestamps) >= max_requests:
@@ -39,39 +30,30 @@ class InMemoryRateLimiter:
 
 
 class RedisRateLimiter:
-    """Redis-backed rate limiter for distributed deployments."""
-
-    def __init__(self, redis_client):
+    def __init__(self, redis_client: Any):
         self.redis = redis_client
         self._prefix = "rate_limit:"
 
     def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
-        """Check rate limit using Redis sorted sets."""
         now = time.time()
         redis_key = f"{self._prefix}{key}"
         window_start = now - window_seconds
 
-        # Remove old entries
         self.redis.zremrangebyscore(redis_key, 0, window_start)
-
-        # Count current requests
         count = self.redis.zcard(redis_key)
 
         if count >= max_requests:
             return False
 
-        # Add current request
         self.redis.zadd(redis_key, {str(now): now})
         self.redis.expire(redis_key, window_seconds + 10)
         return True
 
 
-# Singleton instance (in-memory by default, can be replaced with Redis)
-_rate_limiter: Optional[RateLimitBackend]
+_rate_limiter: Optional[RateLimitBackend] = None
 
 
 def get_rate_limiter() -> RateLimitBackend:
-    """Get the rate limiter instance (singleton)."""
     global _rate_limiter
     if _rate_limiter is None:
         _rate_limiter = InMemoryRateLimiter()
@@ -79,6 +61,43 @@ def get_rate_limiter() -> RateLimitBackend:
 
 
 def set_rate_limiter(limiter: RateLimitBackend) -> None:
-    """Replace the rate limiter with a custom implementation (e.g., Redis)."""
     global _rate_limiter
     _rate_limiter = limiter
+
+
+def rate_limit_decorator(
+    limit: int = 10,
+    window: int = 60,
+    key_func: Optional[Callable[..., str]] = None,
+) -> Callable:
+    """
+    Rate-limit a FastAPI endpoint.
+
+    Args:
+        limit: Maximum number of requests per window.
+        window: Time window in seconds.
+        key_func: Optional callable that receives (request, *args, **kwargs)
+                  and returns a string key for rate limiting.
+                  If not provided, uses the client's IP address.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(request: Request, *args: Any, **kwargs: Any) -> Any:
+            limiter = get_rate_limiter()
+            if key_func:
+                # Pass all arguments so the lambda can access body, db, etc.
+                key = key_func(request, *args, **kwargs)
+            else:
+                key = request.client.host if request.client else "unknown"
+
+            if not limiter.is_allowed(key, limit, window):
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded. Maximum {limit} requests per {window} seconds.",
+                )
+            return await func(request, *args, **kwargs)
+
+        return wrapper
+
+    return decorator

@@ -14,13 +14,13 @@ from sqlalchemy.orm import sessionmaker
 from stripe_subscription.config import settings
 from stripe_subscription.models import Plan
 
-stripe.api_key = settings.STRIPE_SECRET_KEY
+stripe.api_key = settings.get_stripe_secret_key()
 DATABASE_URL = settings.DATABASE_URL
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(bind=engine)
 
 
-def update_price_ids():
+def update_price_ids() -> None:
     """Update plans with correct Stripe price IDs."""
     db = SessionLocal()
 
@@ -29,7 +29,7 @@ def update_price_ids():
         print("🔍 Fetching prices from Stripe...")
         prices = stripe.Price.list(limit=100, active=True)
 
-        price_map = {}
+        price_map: dict[str, str] = {}
         for price in prices.data:
             # Resolve product: if it's a string ID, fetch it; else use the expanded object
             product_id_or_obj = price.product
