@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from stripe_subscription.middlewares.security import ensure_utc_aware
+
 from .config import settings
 from .database import get_db
 from .models import Subscription, User
@@ -39,8 +41,9 @@ def get_active_subscription(
             detail="No active subscription",
         )
 
-    # Check expiration
-    if sub.end_date is not None and sub.end_date < datetime.now(timezone.utc):  # type: ignore
+    # Check expiration – ensure end_date is UTC-aware
+    end_date = ensure_utc_aware(sub.end_date)  # type: ignore
+    if end_date is not None and end_date < datetime.now(timezone.utc):
         sub.status = "expired"  # type: ignore
         db.commit()
         raise HTTPException(

@@ -438,7 +438,10 @@ def serve(
 ):
     """Start the FastAPI server."""
     global tts_model
-    tts_model = TTSModel.load_model(language=language, config=config, quantize=quantize)
+    with enable_logging("pocket_tts", logging.INFO, filter_by_name=False):
+        tts_model = TTSModel.load_model(
+            language=language, config=config, quantize=quantize
+        )
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 
 

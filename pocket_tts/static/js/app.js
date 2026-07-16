@@ -5,16 +5,59 @@ import { initTTS, showApp, setDefaultText } from './tts.js';
 
 let defaultText = "";
 
-try{
+try {
     defaultText = JSON.parse(document.currentScript.dataset.defaultText);
-}
-catch (exception) {
-    console.warn("Could not parse default text, using fallback")
+} catch (exception) {
+    console.warn("Could not parse default text, using fallback");
     defaultText = "Hello World";
 }
 
-// Check initial authentication and subscription
 async function bootstrap() {
+
+    // 1. CHECK FOR PASSWORD RESET TOKEN
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    if (token) {
+        console.log('Reset token found in URL:', token);
+
+        // Validate token with backend before showing the form
+        try {
+            const { apiFetch } = await import('./utils.js');
+            const result = await apiFetch(`/stripe/reset-password?token=${encodeURIComponent(token)}`);
+            // If we get here, token is valid
+            console.log('Token is valid for email:', result.email);
+            switchView('reset');
+            const form = document.getElementById('form-reset');
+            if (form) {
+                form.dataset.token = token;
+                console.log('Token stored in form dataset');
+            }
+            // Clear token from URL
+            const cleanUrl = window.location.origin + window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+            initAuth(); // sets up the form submission
+            return; // stop – do not run auth checks
+        } catch (err) {
+            // Token invalid – show an error message on the login page or a dedicated error view
+            console.error('Token validation failed:', err.message);
+            // You can show an error on the login view or redirect to login with an error param
+            switchView('login');
+            const errorEl = document.getElementById('login-error');
+            if (errorEl) {
+                errorEl.textContent = 'Password reset link is invalid or expired. Please request a new one.';
+                errorEl.style.display = 'block';
+            }
+            // Also clear the token from URL
+            const cleanUrl = window.location.origin + window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+            initAuth();
+            return;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 2. NORMAL AUTHENTICATION FLOW
+    // ------------------------------------------------------------------
     const apiKey = getApiKey();
     if (!apiKey) {
         switchView('login');
@@ -24,8 +67,6 @@ async function bootstrap() {
 
     // Try to fetch subscription
     try {
-        // We need to import auth's afterAuth logic or duplicate the check.
-        // We'll use a dynamic import to avoid circular deps.
         const { apiFetch } = await import('./utils.js');
         const sub = await apiFetch('/stripe/subscription');
         if (sub.status === 'active') {
@@ -35,29 +76,26 @@ async function bootstrap() {
             initPlan();
         }
     } catch (err) {
-        // No active subscription or error
+        console.warn('Subscription fetch failed, showing plan selection:', err);
         switchView('plan');
         initPlan();
     }
-    // Initialize auth module for handling forms (login, register, etc.)
-    // But we need to ensure that auth module doesn't run its own afterAuth again.
-    // So we'll call initAuth() but it will only set up event listeners.
     initAuth();
 }
 
-// Handle success param
+// ------------------------------------------------------------------
+// HANDLE PAYMENT SUCCESS REDIRECT (?success=true)
+// ------------------------------------------------------------------
 if (new URLSearchParams(window.location.search).has('success')) {
-    // After payment, we re-check subscription
+    console.log('Payment success detected, re-checking subscription after delay...');
     const apiKey = getApiKey();
     if (apiKey) {
-        // We need to re-run bootstrap after a short delay to allow webhook processing
+        // Wait a few seconds for webhook to process
         setTimeout(bootstrap, 3000);
     } else {
-        // No key, show login
         switchView('login');
         initAuth();
     }
-    // Clean URL
     const cleanUrl = window.location.origin + window.location.pathname;
     window.history.replaceState({}, document.title, cleanUrl);
 } else {

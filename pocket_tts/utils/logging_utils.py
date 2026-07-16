@@ -2,38 +2,45 @@ import logging
 from contextlib import contextmanager
 
 
-class PocketTTSFilter(logging.Filter):
+class PackageFilter(logging.Filter):
+    def __init__(self, name):
+        self.name = name
+        super().__init__()
+
     def filter(self, record):
-        return record.name.startswith("pocket_tts")
+        return record.name.startswith(self.name)
 
 
 @contextmanager
-def enable_logging(library_name, level):
-    # Get the specific logger and its parent
+def enable_logging(library_name, level, filter_by_name=True):
+    """
+    Enable logging for the given library.
+    If filter_by_name is True (default), only logs from modules starting with
+    library_name are shown. Set to False to see all logs (useful for debugging).
+    """
     logger = logging.getLogger(library_name)
-    parent_logger = logging.getLogger("pocket_tts")
+    parent_logger = logging.getLogger(library_name.split(".")[0])  # root of package
 
-    # Store original configuration
     old_level = logger.level
     old_parent_level = parent_logger.level
     old_handlers = parent_logger.handlers.copy()
 
-    # Configure logging format for pocket_tts logger
     parent_logger.setLevel(level)
-
-    # Clear existing handlers and add our custom formatter with filter
     parent_logger.handlers.clear()
+
     handler = logging.StreamHandler()
     formatter = logging.Formatter("%(levelname)s: %(message)s")
     handler.setFormatter(formatter)
-    handler.addFilter(PocketTTSFilter())
+
+    if filter_by_name:
+        handler.addFilter(PackageFilter(library_name))
+
     parent_logger.addHandler(handler)
     parent_logger.propagate = False
 
     try:
         yield logger
     finally:
-        # Restore original configuration
         logger.setLevel(old_level)
         parent_logger.setLevel(old_parent_level)
         parent_logger.handlers.clear()

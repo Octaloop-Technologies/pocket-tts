@@ -11,17 +11,17 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from stripe_subscription.database import get_db
+from stripe_subscription.email import send_reset_email
 from stripe_subscription.models import User
 from stripe_subscription.security import (
+    create_reset_token,
     generate_api_key,
     hash_password,
+    hash_token,
     log_audit,
     verify_password,
-    create_reset_token,
     verify_reset_token,
-    hash_token,
 )
-from stripe_subscription.email import send_reset_email
 
 logger = logging.getLogger(__name__)
 
@@ -141,18 +141,84 @@ async def request_password_reset(
     db: Session = Depends(get_db),
 ):
     """Request a password reset email."""
+    # Log the email we received (helps debug frontend issues)
+    logger.info(f"Password reset requested for email: {req.email}")
+
     user = db.query(User).filter_by(email=req.email).first()
     if not user:
-        # Do not reveal if email exists; just return success
+        # Do not reveal if email exists; return generic success
         return {"message": "If that email exists, a reset link has been sent."}
 
-    token = create_reset_token(user, db)
-    sent = send_reset_email(req.email, token)
-    if not sent:
-        log_audit(db, user.id, "reset_request_failed", {"email": req.email}, request)  # type: ignore
-        raise HTTPException(500, "Could not send reset email. Try again later.")
-    log_audit(db, user.id, "reset_requested", {"email": req.email}, request)  # type: ignore
-    return {"message": "If that email exists, a reset link has been sent."}
+    try:
+        token = create_reset_token(user, db)
+        print(f"[DEBUG] About to call send_reset_email for {req.email}")
+        sent = send_reset_email(req.email, token)
+        print(f"[DEBUG] send_reset_email returned {sent}")
+
+        if not sent:
+            logger.error(f"Failed to send reset email to {req.email}")
+            log_audit(
+                db,
+                user.id,
+                "reset_request_failed",
+                {"email": req.email, "reason": "send_failed"},
+                request,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not send reset email. Please try again later.",
+            )
+
+        log_audit(db, user.id, "reset_requested", {"email": req.email}, request)
+        return {"message": "If that email exists, a reset link has been sent."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        log_audit(
+            db,
+            user.id,
+            "reset_request_failed",
+            {"email": req.email, "error": str(e)},
+            request,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        )
+
+
+@router.get("/reset-password")
+async def validate_reset_token(
+    token: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Validate a password reset token.
+    Returns 200 OK if valid, 400 with error message if invalid.
+    """
+    token_hash = hash_token(token)
+    user = db.query(User).filter_by(reset_token_hash=token_hash).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token"
+        )
+
+    if not verify_reset_token(token, user):
+        # Token is expired or already used – clear it to prevent reuse attempts
+        user.reset_token_hash = None
+        user.reset_token_expiry = None
+        user.reset_token_used = True
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token expired or already used",
+        )
+
+    # Token is valid – return the associated email (optional)
+    return {"valid": True, "email": user.email}
 
 
 @router.post("/reset-password")

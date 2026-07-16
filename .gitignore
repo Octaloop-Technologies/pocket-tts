@@ -93,3 +93,4 @@ italk.yaml
 # Additional
 # SQLITE3 db file
 *.db
+subscriptions.db

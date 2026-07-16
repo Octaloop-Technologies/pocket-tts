@@ -92,16 +92,16 @@ export function initAuth() {
     });
 
     // Handle token in URL for reset
-    (function initReset() {
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get('token');
-        if (token) {
-            switchView('reset');
-            document.getElementById('form-reset').dataset.token = token;
-            const newUrl = window.location.origin + window.location.pathname;
-            window.history.replaceState({}, document.title, newUrl);
-        }
-    })();
+    // (function initReset() {
+    //     const params = new URLSearchParams(window.location.search);
+    //     const token = params.get('token');
+    //     if (token) {
+    //         switchView('reset');
+    //         document.getElementById('form-reset').dataset.token = token;
+    //         const newUrl = window.location.origin + window.location.pathname;
+    //         window.history.replaceState({}, document.title, newUrl);
+    //     }
+    // })();
 
     // View switching via data-view links (delegated)
     document.addEventListener('click', (e) => {

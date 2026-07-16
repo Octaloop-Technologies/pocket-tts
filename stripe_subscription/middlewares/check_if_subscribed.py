@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from stripe_subscription.config import settings
 from stripe_subscription.database import get_db
+from stripe_subscription.middlewares.security import ensure_utc_aware
 from stripe_subscription.models import Subscription, User
 
 
@@ -53,7 +54,8 @@ class SubscriptionMiddleware(BaseHTTPMiddleware):
                         },
                     )
 
-                if sub.end_date and sub.end_date < datetime.now(timezone.utc):  # type: ignore
+                end_date = ensure_utc_aware(sub.end_date)  # type: ignore
+                if end_date is not None and end_date < datetime.now(timezone.utc):
                     sub.status = "expired"  # type: ignore
                     db.commit()
                     return JSONResponse(
