@@ -29,6 +29,7 @@ dependencies = [
     "bcrypt>=5.0.0",
     "python-jose[cryptography]>=3.5.0",
     "passlib[bcrypt]>=1.7.4",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]
