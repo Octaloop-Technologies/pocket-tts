@@ -32,7 +32,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def ensure_utc_aware(dt: Optional[datetime]) -> datetime:
+def ensure_utc_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
