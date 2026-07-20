@@ -42,9 +42,14 @@ from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
 from stripe_subscription.config import settings
 from stripe_subscription.database import Base, engine, get_db
-from stripe_subscription.dependencies import get_active_subscription, get_current_user
+from stripe_subscription.dependencies import (
+    get_active_subscription,
+    get_current_user,
+)
 from stripe_subscription.logging import logger
-from stripe_subscription.middlewares.check_if_subscribed import SubscriptionMiddleware
+from stripe_subscription.middlewares.check_if_subscribed import (
+    SubscriptionMiddleware,
+)
 from stripe_subscription.middlewares.security import SecurityHeadersMiddleware
 from stripe_subscription.models import Plan, Subscription, User
 from stripe_subscription.routes import router as stripe_router
@@ -206,7 +211,7 @@ def text_to_speech(
     # ------------------------------------------------------------------
     logger.info(
         f"✅ SUBSCRIPTION ACTIVE for user {user.id} ({user.email}) – "
-        f"Plan: {sub.plan.name}, Remaining: {sub.quota_limit - sub.characters_used} chars. Proceeding with TTS."
+        f"Plan: {sub.plan.name}, Remaining: {sub.quota_limit - sub.characters_used} chars."
     )
 
     if tts_model is None:
@@ -352,7 +357,7 @@ def generate(
     output_path: Annotated[
         str, typer.Option(help="Output path for generated audio")
     ] = "./tts_output.wav",
-    device: Annotated[str, typer.Option(help="Device to use")] = "cpu",
+    device: Annotated[str, typer.Option(help="Device to use. (cpu | cuda)")] = "cuda",
     max_tokens: Annotated[
         int, typer.Option(help="Maximum number of tokens per chunk.")
     ] = MAX_TOKEN_PER_CHUNK,
@@ -435,6 +440,7 @@ def serve(
         str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
     quantize: Annotated[bool, typer.Option(help="Apply int8 quantization")] = False,
+    device: Annotated[str, typer.Option(help="Device to use (cpu | cuda)")] = "cuda",
 ):
     """Start the FastAPI server."""
     global tts_model
@@ -442,6 +448,7 @@ def serve(
         tts_model = TTSModel.load_model(
             language=language, config=config, quantize=quantize
         )
+        tts_model.to(device=device)
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 
 
