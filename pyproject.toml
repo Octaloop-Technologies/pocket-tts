@@ -6,9 +6,12 @@ version = "2.1.0"
 readme = "README.md"
 dependencies = [
     "numpy>=2",
-    # I tried 2.4.0 but the generated audio is wrong, so 2.5+ is needed.
-    "torch>=2.5.0",
-    "pydantic>=2",
+    # Pinned CUDA 11.8 builds for Windows/Linux
+    # "torch==2.5.1+cu118",
+    # "torchvision==0.20.1+cu118",
+    # "torchaudio==2.5.1+cu118",
+    "pydantic>=2.13.4",
+    "pydantic[email]>=2.13.4",
     "sentencepiece>=0.2.1",
     "beartype>=0.22.5",
     "safetensors>=0.4.0",
@@ -54,12 +57,18 @@ dev = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu" },
+    { index = "pytorch-cu118" },
+]
+torchvision = [
+    { index = "pytorch-cu118" },
+]
+torchaudio = [
+    { index = "pytorch-cu118" },
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
 explicit = true
 
 [tool.ruff]
