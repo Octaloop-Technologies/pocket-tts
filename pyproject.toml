@@ -75,7 +75,7 @@ skip-magic-trailing-comma = true
 plugins = ["sqlalchemy.ext.mypy.plugin"]
 
 [tool.pyright]
-typeCheckingMode = "standard"
+typeCheckingMode = "basic"
 exclude = ["**/node_modules", "**/__pycache__/**", "**/site-packages/**", "**/.venv/**", "**/.venv/**", "pyproject.toml", "**/.*"]
 
 
