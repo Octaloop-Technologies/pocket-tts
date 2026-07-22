@@ -10,15 +10,7 @@ from queue import Queue
 
 import typer
 import uvicorn
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    HTTPException,
-    Request,
-    UploadFile,
-)
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,30 +34,22 @@ from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
 from stripe_subscription.config import settings
 from stripe_subscription.database import Base, engine, get_db
-from stripe_subscription.dependencies import (
-    get_active_subscription,
-    get_current_user,
-)
+from stripe_subscription.dependencies import get_active_subscription, get_current_user
 from stripe_subscription.logging import logger
-from stripe_subscription.middlewares.check_if_subscribed import (
-    SubscriptionMiddleware,
-)
+from stripe_subscription.middlewares.check_if_subscribed import SubscriptionMiddleware
 from stripe_subscription.middlewares.security import SecurityHeadersMiddleware
 from stripe_subscription.models import Plan, Subscription, User
 from stripe_subscription.routes import router as stripe_router
 
 cli_app = typer.Typer(
-    help="Kyutai Pocket TTS - Text-to-Speech generation tool",
-    pretty_exceptions_show_locals=False,
+    help="Kyutai Pocket TTS - Text-to-Speech generation tool", pretty_exceptions_show_locals=False
 )
 
 # Global model instance
 tts_model: TTSModel | None = None
 
 web_app = FastAPI(
-    title="Kyutai Pocket TTS API",
-    description="Text-to-Speech generation API",
-    version="1.0.0",
+    title="Kyutai Pocket TTS API", description="Text-to-Speech generation API", version="1.0.0"
 )
 
 BASE_DIR = Path(__file__).parent
@@ -157,26 +141,17 @@ async def root(request: Request):
     try:
         if tts_model is None:
             return templates.TemplateResponse(
-                request,
-                "index.jinja2",
-                {
-                    "default_text": "Model not loaded.",
-                    "tts_loaded": False,
-                },
+                request, "index.jinja2", {"default_text": "Model not loaded.", "tts_loaded": False}
             )
         default_text = get_default_text_for_language(str(tts_model.origin))
         return templates.TemplateResponse(
-            request,
-            "index.jinja2",
-            {"default_text": default_text, "tts_loaded": True},
+            request, "index.jinja2", {"default_text": default_text, "tts_loaded": True}
         )
     except Exception:
         # Print full stack trace to server logs
         logging.error("Template rendering failed:\n" + traceback.format_exc())
         # Return a simple error page with the exception message
-        return HTMLResponse(
-            f"<h1>Template error</h1><pre>{traceback.format_exc()}</pre>"
-        )
+        return HTMLResponse(f"<h1>Template error</h1><pre>{traceback.format_exc()}</pre>")
 
 
 @web_app.get("/health")
@@ -237,9 +212,7 @@ def text_to_speech(
             or voice_url.startswith("hf://")
             or voice_url in _ORIGINS_OF_PREDEFINED_VOICES
         ):
-            raise HTTPException(
-                400, "voice_url must start with http://, https://, or hf://"
-            )
+            raise HTTPException(400, "voice_url must start with http://, https://, or hf://")
         model_state = tts_model._cached_get_state_for_audio_prompt(voice_url)
     elif voice_wav is not None:
         suffix = Path(voice_wav.filename).suffix if voice_wav.filename else ".wav"
@@ -249,9 +222,7 @@ def text_to_speech(
             temp_file.flush()
             temp_file_path = temp_file.name
         try:
-            model_state = tts_model.get_state_for_audio_prompt(
-                Path(temp_file_path), truncate=True
-            )
+            model_state = tts_model.get_state_for_audio_prompt(Path(temp_file_path), truncate=True)  # type: ignore
         finally:
             os.unlink(temp_file_path)
     else:
@@ -302,16 +273,12 @@ def write_to_queue(queue, text_to_generate, model_state):
     audio_chunks = tts_model.generate_audio_stream(
         model_state=model_state, text_to_generate=text_to_generate
     )
-    stream_audio_chunks(
-        FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate
-    )
+    stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate)
 
 
 def generate_data_with_state(text_to_generate: str, model_state: dict):
-    queue = Queue()
-    thread = threading.Thread(
-        target=write_to_queue, args=(queue, text_to_generate, model_state)
-    )
+    queue = Queue()  # type: ignore
+    thread = threading.Thread(target=write_to_queue, args=(queue, text_to_generate, model_state))
     thread.start()
     while True:
         data = queue.get()
@@ -327,15 +294,9 @@ def generate_data_with_state(text_to_generate: str, model_state: dict):
 @cli_app.command()
 def generate(
     text: Annotated[str | None, typer.Option(help="Text to generate")] = None,
-    voice: Annotated[
-        str | None, typer.Option(help="Path to audio conditioning file")
-    ] = None,
-    quiet: Annotated[
-        bool, typer.Option("-q", "--quiet", help="Disable logging output")
-    ] = False,
-    language: Annotated[
-        str | None, typer.Option(help="Language for the TTS model")
-    ] = None,
+    voice: Annotated[str | None, typer.Option(help="Path to audio conditioning file")] = None,
+    quiet: Annotated[bool, typer.Option("-q", "--quiet", help="Disable logging output")] = False,
+    language: Annotated[str | None, typer.Option(help="Language for the TTS model")] = None,
     config: Annotated[
         str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
@@ -348,9 +309,7 @@ def generate(
     noise_clamp: Annotated[
         float | None, typer.Option(help="Noise clamp value")
     ] = DEFAULT_NOISE_CLAMP,
-    eos_threshold: Annotated[
-        float, typer.Option(help="EOS threshold")
-    ] = DEFAULT_EOS_THRESHOLD,
+    eos_threshold: Annotated[float, typer.Option(help="EOS threshold")] = DEFAULT_EOS_THRESHOLD,
     frames_after_eos: Annotated[
         int | None, typer.Option(help="Number of frames to generate after EOS")
     ] = DEFAULT_FRAMES_AFTER_EOS,
@@ -385,16 +344,14 @@ def generate(
         tts_model.to(device)
         if voice is None:
             voice = get_default_voice_for_language(language)
-        model_state_for_voice = tts_model.get_state_for_audio_prompt(voice)
+        model_state_for_voice = tts_model.get_state_for_audio_prompt(voice)  # type: ignore
         audio_chunks = tts_model.generate_audio_stream(
             model_state=model_state_for_voice,
             text_to_generate=text,  # type: ignore
             frames_after_eos=frames_after_eos,
             max_tokens=max_tokens,
         )
-        stream_audio_chunks(
-            output_path, audio_chunks, tts_model.config.mimi.sample_rate
-        )
+        stream_audio_chunks(output_path, audio_chunks, tts_model.config.mimi.sample_rate)
         if output_path != "-":
             logger.info("Results written in %s", output_path)
         logger.info("-" * 20)
@@ -410,12 +367,8 @@ def generate(
 def export_voice(
     audio_path: Annotated[str, typer.Argument(help="Audio file or directory")],
     export_path: Annotated[str, typer.Argument(help="Output file or directory")],
-    quiet: Annotated[
-        bool, typer.Option("-q", "--quiet", help="Disable logging output")
-    ] = False,
-    language: Annotated[
-        str | None, typer.Option(help="Language for the TTS model")
-    ] = None,
+    quiet: Annotated[bool, typer.Option("-q", "--quiet", help="Disable logging output")] = False,
+    language: Annotated[str | None, typer.Option(help="Language for the TTS model")] = None,
     config: Annotated[
         str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
@@ -424,8 +377,8 @@ def export_voice(
     log_level = logging.ERROR if quiet else logging.INFO
     with enable_logging("pocket_tts", log_level):
         tts_model = TTSModel.load_model(language=language, config=config)
-        model_state = tts_model.get_state_for_audio_prompt(audio_path, truncate=True)
-        export_model_state(model_state, export_path)
+        model_state = tts_model.get_state_for_audio_prompt(audio_path, truncate=True)  # type: ignore
+        export_model_state(model_state, export_path)  # type: ignore
 
 
 @cli_app.command()
@@ -433,9 +386,7 @@ def serve(
     host: Annotated[str, typer.Option(help="Host to bind to")] = "localhost",
     port: Annotated[int, typer.Option(help="Port to bind to")] = 8000,
     reload: Annotated[bool, typer.Option(help="Enable auto-reload")] = False,
-    language: Annotated[
-        str | None, typer.Option(help="Language for the TTS model")
-    ] = None,
+    language: Annotated[str | None, typer.Option(help="Language for the TTS model")] = None,
     config: Annotated[
         str | None, typer.Option(help="Path to locally-saved model config .yaml file")
     ] = None,
@@ -445,9 +396,7 @@ def serve(
     """Start the FastAPI server."""
     global tts_model
     with enable_logging("pocket_tts", logging.INFO, filter_by_name=False):
-        tts_model = TTSModel.load_model(
-            language=language, config=config, quantize=quantize
-        )
+        tts_model = TTSModel.load_model(language=language, config=config, quantize=quantize)
         tts_model.to(device=device)
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 
