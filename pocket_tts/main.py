@@ -4,18 +4,15 @@ import os
 import sys
 import tempfile
 import threading
-import traceback
 from pathlib import Path
 from queue import Queue
 
 import typer
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
 from typing_extensions import Annotated
 
 from pocket_tts.data.audio import stream_audio_chunks
@@ -32,14 +29,7 @@ from pocket_tts.default_parameters import (
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
-from stripe_subscription.config import settings
-from stripe_subscription.database import Base, engine, get_db
-from stripe_subscription.dependencies import get_active_subscription, get_current_user
 from stripe_subscription.logging import logger
-from stripe_subscription.middlewares.check_if_subscribed import SubscriptionMiddleware
-from stripe_subscription.middlewares.security import SecurityHeadersMiddleware
-from stripe_subscription.models import Plan, Subscription, User
-from stripe_subscription.routes import router as stripe_router
 
 cli_app = typer.Typer(
     help="Kyutai Pocket TTS - Text-to-Speech generation tool", pretty_exceptions_show_locals=False
@@ -54,7 +44,6 @@ web_app = FastAPI(
 
 BASE_DIR = Path(__file__).parent
 web_app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "static" / "templates"))
 
 web_app.add_middleware(
     CORSMiddleware,
@@ -70,88 +59,18 @@ web_app.add_middleware(
     allow_headers=["*"],
 )
 
-# Check Subscription Middleware
-web_app.add_middleware(SubscriptionMiddleware)
-
-# Security Middleware
-web_app.add_middleware(SecurityHeadersMiddleware)
-
-# ----- Mount Stripe router -----
-web_app.include_router(stripe_router)
-
-
-# ----- Seed default plans on startup -----
-@web_app.on_event("startup")
-def startup():
-    Base.metadata.create_all(bind=engine)
-    db = next(get_db())
-    try:
-        if db.query(Plan).count() == 0:
-            plans = [
-                Plan(
-                    name="Basic",
-                    tier="basic",
-                    monthly_price=500,
-                    yearly_price=4800,
-                    quota_limit=50000,
-                    stripe_price_monthly=settings.STRIPE_PRICE_BASIC_MONTHLY_ID,
-                    stripe_price_yearly=settings.STRIPE_PRICE_BASIC_YEARLY_ID,
-                    is_active=True,
-                ),
-                Plan(
-                    name="Pro",
-                    tier="pro",
-                    monthly_price=1500,
-                    yearly_price=14400,
-                    quota_limit=250000,
-                    stripe_price_monthly=settings.STRIPE_PRICE_PRO_MONTHLY_ID,
-                    stripe_price_yearly=settings.STRIPE_PRICE_PRO_YEARLY_ID,
-                    is_active=True,
-                ),
-                Plan(
-                    name="Enterprise",
-                    tier="enterprise",
-                    monthly_price=5000,
-                    yearly_price=48000,
-                    quota_limit=1500000,
-                    stripe_price_monthly=settings.STRIPE_PRICE_ENTERPRISE_MONTHLY_ID,
-                    stripe_price_yearly=settings.STRIPE_PRICE_ENTERPRISE_YEARLY_ID,
-                    is_active=True,
-                ),
-            ]
-            db.add_all(plans)
-            db.commit()
-            logger.info("Default plans seeded with Stripe Price IDs.")
-    except Exception as e:
-        logger.error(f"Error seeding plans: {str(e)}", exc_info=True)
-    finally:
-        db.close()
-
-
-@web_app.exception_handler(ConnectionResetError)
-async def connection_reset_handler(request: Request, exc: ConnectionResetError):
-    return JSONResponse(
-        status_code=499, content={"detail": "Client disconnected", "error": f"{exc}"}
-    )
-
 
 # ----- Endpoints -----
 @web_app.get("/")
-async def root(request: Request):
-    try:
-        if tts_model is None:
-            return templates.TemplateResponse(
-                request, "index.jinja2", {"default_text": "Model not loaded.", "tts_loaded": False}
-            )
-        default_text = get_default_text_for_language(str(tts_model.origin))
-        return templates.TemplateResponse(
-            request, "index.jinja2", {"default_text": default_text, "tts_loaded": True}
+async def root():
+    """Serve the standalone TTS UI."""
+    static_html = BASE_DIR / "static" / "index.html"
+    if static_html.exists():
+        return FileResponse(static_html)
+    else:
+        return HTMLResponse(
+            "index.html not found. Please ensure static/index.html exists.", status_code=404
         )
-    except Exception:
-        # Print full stack trace to server logs
-        logging.error("Template rendering failed:\n" + traceback.format_exc())
-        # Return a simple error page with the exception message
-        return HTMLResponse(f"<h1>Template error</h1><pre>{traceback.format_exc()}</pre>")
 
 
 @web_app.get("/health")
@@ -159,44 +78,17 @@ async def health():
     return {"status": "healthy"}
 
 
-@web_app.get("/success")
-async def success_page():
-    return HTMLResponse("""
-        <html><body>
-            <h1>Payment successful!</h1>
-            <p>Redirecting to the app...</p>
-            <script>setTimeout(() => window.location.href = '/', 2000);</script>
-        </body></html>
-    """)
-
-
 @web_app.post("/tts")
 def text_to_speech(
-    request: Request,
     text: str = Form(...),
     voice_url: str | None = Form(default=None),
     voice_wav: UploadFile | None = File(None),
-    user: User = Depends(get_current_user),
-    sub: Subscription = Depends(get_active_subscription),
-    db: Session = Depends(get_db),
 ):
-    # ------------------------------------------------------------------
-    # 🔒 LOG: Subscription check passed before any generation starts
-    # ------------------------------------------------------------------
-    logger.info(
-        f"✅ SUBSCRIPTION ACTIVE for user {user.id} ({user.email}) – "
-        f"Plan: {sub.plan.name}, Remaining: {sub.quota_limit - sub.characters_used} chars."
-    )
-
     if tts_model is None:
         raise HTTPException(503, "TTS model not loaded")
 
     if not text.strip():
         raise HTTPException(400, "Text cannot be empty")
-
-    # Check quota
-    if sub.characters_used + len(text) > sub.quota_limit:  # type: ignore
-        raise HTTPException(429, "Monthly character limit exceeded")
 
     if voice_url is None and voice_wav is None:
         voice_url = get_default_voice_for_language(str(tts_model.origin))
@@ -227,21 +119,12 @@ def text_to_speech(
     else:
         raise HTTPException(500, "This should never happen.")
 
-    # Generator that updates usage after streaming
-    def generate_with_usage():
-        try:
-            for chunk in generate_data_with_state(text, model_state):
-                yield chunk
-        finally:
-            sub.characters_used += len(text)  # type: ignore
-            db.commit()
-            logger.info(
-                f"User {user.id} used {len(text)} chars, total {sub.characters_used}/{sub.quota_limit}"
-            )
+    def generate_without_usage():
+        for chunk in generate_data_with_state(text, model_state):
+            yield chunk
 
-    # Return with security headers
     return StreamingResponse(
-        generate_with_usage(),
+        generate_without_usage(),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
@@ -287,6 +170,7 @@ def generate_data_with_state(text_to_generate: str, model_state: dict):
     thread.join()
 
 
+# ----- CLI commands (unchanged) -----
 @cli_app.command()
 def generate(
     text: Annotated[str | None, typer.Option(help="Text to generate")] = None,

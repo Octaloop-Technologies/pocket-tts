@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Pocket TTS</title>
+        <link rel="stylesheet" href="/static/css/style.css">
+        <style>
+            /* Additional tweaks for standalone mode */
+            .container {
+                max-width: 600px;
+                margin: 0 auto;
+            }
+
+            #audio-section {
+                margin-top: 1.5rem;
+            }
+
+            #audio-section audio {
+                width: 100%;
+            }
+
+            .flex-row {
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+                margin-bottom: 1rem;
+            }
+
+            .flex-row input,
+            .flex-row input[type="file"] {
+                flex: 1;
+            }
+
+            .btn-outline {
+                background: transparent;
+                border: 1px solid #635bff;
+                color: #635bff;
+            }
+
+            .btn-outline:hover {
+                background: #f5f3ff;
+            }
+
+            .error {
+                color: #b91c1c;
+                background: #fee2e2;
+                padding: 0.5rem;
+                border-radius: 6px;
+                margin-top: 0.5rem;
+                display: none;
+            }
+
+            .success {
+                color: #1e3a8a;
+                background: #dbeafe;
+                padding: 0.5rem;
+                border-radius: 6px;
+                margin-top: 0.5rem;
+                display: none;
+            }
+
+            .badge {
+                background: #e5e7eb;
+                padding: 0.2rem 0.8rem;
+                border-radius: 20px;
+                font-size: 0.8rem;
+            }
+
+            .navbar {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid #e5e7eb;
+                margin-bottom: 1.5rem;
+            }
+
+            .user-info {
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                flex-wrap: wrap;
+            }
+
+            textarea {
+                width: 100%;
+                padding: 0.75rem;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                margin-bottom: 1rem;
+                resize: vertical;
+                font-family: inherit;
+            }
+
+            .btn {
+                background: #635bff;
+                color: white;
+                border: none;
+                padding: 0.7rem;
+                border-radius: 6px;
+                font-weight: 600;
+                cursor: pointer;
+                width: 100%;
+                margin-top: 0.5rem;
+            }
+
+            .btn:hover {
+                background: #4f47d6;
+            }
+
+            .btn:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div class="container">
+            <div class="navbar">
+                <div><strong>🎙️ Pocket TTS</strong></div>
+                <div class="user-info">
+                    <span class="badge">Plan: Test</span>
+                    <span class="badge" id="remaining-badge">Remaining: ∞</span>
+                </div>
+            </div>
+
+            <div id="tts-ui">
+                <textarea id="text-input"
+                    rows="4">Hello world! I am Kyutai's Pocket TTS. I'm fast enough to run on small CPUs. I hope you'll like me.</textarea>
+                <div class="flex-row">
+                    <input type="text" id="voice-url" placeholder="Optional: voice URL or name (e.g. alba)" />
+                    <input type="file" id="voice-file" accept=".wav,.mp3" />
+                </div>
+                <button id="generate-btn" class="btn">Generate Audio</button>
+                <div id="status" class="error"></div>
+                <div id="audio-section" style="display:none;">
+                    <h3>Generated Audio</h3>
+                    <audio id="audio" controls></audio>
+                    <a id="download-link" class="btn btn-outline"
+                        style="display:inline-block;margin-top:0.5rem;width:auto;padding:0.5rem 1rem;">Download</a>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            (function () {
+                const textInput = document.getElementById('text-input');
+                const voiceUrlInput = document.getElementById('voice-url');
+                const voiceFileInput = document.getElementById('voice-file');
+                const generateBtn = document.getElementById('generate-btn');
+                const statusDiv = document.getElementById('status');
+                const audioSection = document.getElementById('audio-section');
+                const audioEl = document.getElementById('audio');
+                const downloadLink = document.getElementById('download-link');
+
+                function setStatus(msg, isError = false) {
+                    statusDiv.textContent = msg;
+                    statusDiv.style.display = 'block';
+                    statusDiv.className = isError ? 'error' : 'success';
+                }
+
+                function hideStatus() {
+                    statusDiv.style.display = 'none';
+                }
+
+                async function generateAudio() {
+                    const text = textInput.value.trim();
+                    if (!text) {
+                        setStatus('Please enter text.', true);
+                        return;
+                    }
+
+                    const formData = new FormData();
+                    formData.append('text', text);
+
+                    const voiceUrl = voiceUrlInput.value.trim();
+                    const voiceFile = voiceFileInput.files[0];
+                    if (voiceFile) {
+                        formData.append('voice_wav', voiceFile);
+                    } else if (voiceUrl) {
+                        formData.append('voice_url', voiceUrl);
+                    }
+
+                    generateBtn.disabled = true;
+                    generateBtn.textContent = 'Generating...';
+                    hideStatus();
+                    audioSection.style.display = 'none';
+
+                    try {
+                        const response = await fetch('/tts', {
+                            method: 'POST',
+                            body: formData,
+                            // No headers – bypass mode doesn't require API key
+                        });
+
+                        if (!response.ok) {
+                            let errMsg = `Server error ${response.status}`;
+                            try {
+                                const errData = await response.json();
+                                errMsg = errData.detail || errMsg;
+                            } catch (_) { }
+                            throw new Error(errMsg);
+                        }
+
+                        const blob = await response.blob();
+                        const url = URL.createObjectURL(blob);
+                        audioEl.src = url;
+                        downloadLink.href = url;
+                        downloadLink.download = 'tts-output.wav';
+                        audioSection.style.display = 'block';
+                        setStatus('Audio generated!');
+                    } catch (err) {
+                        setStatus(err.message || 'Generation failed.', true);
+                    } finally {
+                        generateBtn.disabled = false;
+                        generateBtn.textContent = 'Generate Audio';
+                    }
+                }
+
+                generateBtn.addEventListener('click', generateAudio);
+
+                // Enter key in textarea triggers generation (but allow newlines with Shift+Enter)
+                textInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        generateAudio();
+                    }
+                });
+            })();
+        </script>
+    </body>
+
+</html>
