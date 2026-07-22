@@ -170,7 +170,6 @@ async def success_page():
     """)
 
 
-# ----- Protected TTS endpoint (fixed parameter order) -----
 @web_app.post("/tts")
 def text_to_speech(
     request: Request,
@@ -288,9 +287,6 @@ def generate_data_with_state(text_to_generate: str, model_state: dict):
     thread.join()
 
 
-# ------------------------------------------------------
-# CLI commands (unchanged)
-# ------------------------------------------------------
 @cli_app.command()
 def generate(
     text: Annotated[str | None, typer.Option(help="Text to generate")] = None,
